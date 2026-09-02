@@ -410,6 +410,65 @@ def _sanitize_image_file(image_path: str) -> str:
     return sanitized_path
 
 
+CHARACTER_OVERLAY_EXTENSIONS = (".jpg", ".jpeg", ".png")
+
+
+def character_overlay_dir(create: bool = False) -> str:
+    return utils.storage_dir("character_photos", create=create)
+
+
+def pick_random_character_overlay_image() -> str:
+    """
+    从固定角色素材目录随机挑选一张人物照片。
+
+    目录里放的是用户自己的照片（同一角色），与背景视频来源完全独立；
+    没有配置任何照片时返回空字符串，调用方据此跳过叠加而不是报错中断成片。
+    """
+    overlay_dir = character_overlay_dir()
+    if not os.path.isdir(overlay_dir):
+        return ""
+    candidates = [
+        os.path.join(overlay_dir, name)
+        for name in sorted(os.listdir(overlay_dir))
+        if name.lower().endswith(CHARACTER_OVERLAY_EXTENSIONS)
+    ]
+    if not candidates:
+        return ""
+    return random.choice(candidates)
+
+
+def _build_character_overlay_clip(
+    image_path: str,
+    video_width: int,
+    video_height: int,
+    duration: float,
+    position: str,
+    scale: float,
+    margin: int,
+):
+    """
+    把固定人物照片做成贴边画中画：按视频宽度的比例缩放，四个角可选，
+    覆盖整段成片时长。透明背景的 PNG 会保留自身透明通道。
+    """
+    overlay_clip, _ = _open_image_clip_with_fallback(image_path)
+    target_width = max(1, int(video_width * scale))
+    overlay_clip = overlay_clip.resized(width=target_width)
+
+    if position == "bottom_left":
+        pos = (margin, video_height - overlay_clip.h - margin)
+    elif position == "top_right":
+        pos = (video_width - overlay_clip.w - margin, margin)
+    elif position == "top_left":
+        pos = (margin, margin)
+    else:  # bottom_right（默认）
+        pos = (
+            video_width - overlay_clip.w - margin,
+            video_height - overlay_clip.h - margin,
+        )
+
+    return overlay_clip.with_position(pos).with_duration(duration)
+
+
 def _open_image_clip_with_fallback(image_path: str):
     # 优先直接打开原始图片；如果因为损坏元数据失败，再尝试生成无元数据副本。
     try:
@@ -1291,6 +1350,35 @@ def generate_video(
                 text_clips.append(clip)
             video_clip = CompositeVideoClip([video_clip, *text_clips])
             clip_stack.callback(video_clip.close)
+
+        if getattr(params, "character_overlay_enabled", False):
+            overlay_image_path = pick_random_character_overlay_image()
+            if overlay_image_path:
+                try:
+                    overlay_clip = _build_character_overlay_clip(
+                        overlay_image_path,
+                        video_width,
+                        video_height,
+                        video_clip.duration,
+                        getattr(params, "character_overlay_position", "bottom_right"),
+                        getattr(params, "character_overlay_scale", 0.28),
+                        getattr(params, "character_overlay_margin", 24),
+                    )
+                    clip_stack.callback(overlay_clip.close)
+                    video_clip = CompositeVideoClip([video_clip, overlay_clip])
+                    clip_stack.callback(video_clip.close)
+                    logger.info(f"  ⑥ character overlay: {overlay_image_path}")
+                except Exception:
+                    # 叠加失败不应中断整条成片流程，照片可能损坏或格式异常，
+                    # 降级为不带角色画中画的成片，并记录完整堆栈便于排查。
+                    logger.exception(
+                        f"failed to apply character overlay: {overlay_image_path}"
+                    )
+            else:
+                logger.warning(
+                    "character overlay is enabled but no images were found in "
+                    f"{character_overlay_dir()}"
+                )
 
         bgm_enabled = bgm_service.should_use_bgm(
             params.bgm_type, params.bgm_volume

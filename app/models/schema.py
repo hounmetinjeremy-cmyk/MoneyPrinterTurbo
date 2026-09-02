@@ -136,6 +136,21 @@ class VideoParams(BaseModel):
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
 
+    # 固定角色画中画：从 storage/character_photos/ 随机挑选一张用户提供的
+    # 人物照片，叠加在每次生成的成片上，保证同一角色出现在每条视频里，
+    # 与背景素材来源（Pexels/local 等）无关。默认值读取 config.toml [ui]，
+    # 与 subtitle_position 用同一套模式，让 CLI/API 无需额外传参也能生效。
+    character_overlay_enabled: bool = config.ui.get("character_overlay_enabled", False)
+    character_overlay_position: Optional[str] = config.ui.get(
+        "character_overlay_position", "bottom_right"
+    )
+    character_overlay_scale: float = Field(
+        default=config.ui.get("character_overlay_scale", 0.28), gt=0, le=1
+    )
+    character_overlay_margin: int = Field(
+        default=config.ui.get("character_overlay_margin", 24), ge=0
+    )
+
 
 class SubtitleRequest(BaseModel):
     video_script: str
