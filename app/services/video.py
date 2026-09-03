@@ -1,3 +1,4 @@
+import base64
 import itertools
 import io
 import math
@@ -411,6 +412,10 @@ def _sanitize_image_file(image_path: str) -> str:
 
 
 CHARACTER_OVERLAY_EXTENSIONS = (".jpg", ".jpeg", ".png")
+# 手机控制页只能通过连接器把文件内容当"纯文本"写入仓库（没有真正的二进制
+# 上传能力），因此照片改为以 base64 文本形式保存为 .b64 文件；这里在生成
+# 阶段统一解码回真实图片，对上层调用方（pick/build）完全透明。
+CHARACTER_OVERLAY_B64_EXTENSION = ".b64"
 
 
 def character_overlay_dir(create: bool = False) -> str:
@@ -419,7 +424,7 @@ def character_overlay_dir(create: bool = False) -> str:
 
 def pick_random_character_overlay_image() -> str:
     """
-    从固定角色素材目录随机挑选一张人物照片。
+    从固定角色素材目录随机挑选一张人物照片（原始图片文件或 .b64 文本文件）。
 
     目录里放的是用户自己的照片（同一角色），与背景视频来源完全独立；
     没有配置任何照片时返回空字符串，调用方据此跳过叠加而不是报错中断成片。
@@ -427,14 +432,35 @@ def pick_random_character_overlay_image() -> str:
     overlay_dir = character_overlay_dir()
     if not os.path.isdir(overlay_dir):
         return ""
+    valid_suffixes = CHARACTER_OVERLAY_EXTENSIONS + (CHARACTER_OVERLAY_B64_EXTENSION,)
     candidates = [
         os.path.join(overlay_dir, name)
         for name in sorted(os.listdir(overlay_dir))
-        if name.lower().endswith(CHARACTER_OVERLAY_EXTENSIONS)
+        if name.lower().endswith(valid_suffixes)
     ]
     if not candidates:
         return ""
     return random.choice(candidates)
+
+
+def _open_character_overlay_source(image_path: str):
+    """
+    打开一张角色素材，兼容普通图片文件和 base64 文本文件（.b64）。
+
+    .b64 文件的文本内容就是原始图片的 base64 编码（手机控制页通过连接器
+    只能写纯文本，无法直接上传二进制），这里解码后在内存中构造 ImageClip，
+    不落地临时文件。损坏的 base64 或图片数据会在这里抛出，交由调用方
+    （generate_video 里的 try/except）降级为不带角色画中画的成片。
+    """
+    if image_path.lower().endswith(CHARACTER_OVERLAY_B64_EXTENSION):
+        with open(image_path, "r", encoding="utf-8") as f:
+            raw_b64 = f.read().strip()
+        image_bytes = base64.b64decode(raw_b64, validate=True)
+        pil_image = Image.open(io.BytesIO(image_bytes))
+        pil_image.load()
+        return ImageClip(np.array(pil_image.convert("RGBA")))
+    overlay_clip, _ = _open_image_clip_with_fallback(image_path)
+    return overlay_clip
 
 
 def _build_character_overlay_clip(
@@ -450,7 +476,7 @@ def _build_character_overlay_clip(
     把固定人物照片做成贴边画中画：按视频宽度的比例缩放，四个角可选，
     覆盖整段成片时长。透明背景的 PNG 会保留自身透明通道。
     """
-    overlay_clip, _ = _open_image_clip_with_fallback(image_path)
+    overlay_clip = _open_character_overlay_source(image_path)
     target_width = max(1, int(video_width * scale))
     overlay_clip = overlay_clip.resized(width=target_width)
 
