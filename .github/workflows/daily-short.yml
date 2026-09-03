@@ -26,6 +26,9 @@ concurrency:
   group: daily-short
   cancel-in-progress: false
 
+permissions:
+  contents: write # needed to push the preview video back to the repo
+
 jobs:
   generate-and-publish:
     runs-on: ubuntu-latest
@@ -99,7 +102,26 @@ jobs:
           ")
           echo "video_path=$VIDEO_PATH" >> "$GITHUB_OUTPUT"
 
+      - name: Check whether YouTube secrets are configured
+        # Lets the pipeline be used purely for testing/preview (via La
+        # Régie's "Voir la dernière vidéo") before the YouTube OAuth secrets
+        # exist — the upload step below is skipped cleanly instead of
+        # failing the whole run when any of the three is missing.
+        id: ytcheck
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: |
+          if [ -n "$YT_CLIENT_ID" ] && [ -n "$YT_CLIENT_SECRET" ] && [ -n "$YT_REFRESH_TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::YouTube secrets are not fully configured — skipping upload, video stays a preview only."
+          fi
+
       - name: Upload to YouTube
+        if: steps.ytcheck.outputs.configured == 'true'
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
@@ -109,9 +131,29 @@ jobs:
             "${{ steps.generate.outputs.video_path }}" \
             "${{ steps.pick.outputs.subject }}"
 
+      - name: Save preview video to the repo
+        # Always keeps the latest render reachable from La Régie
+        # (previews/latest.mp4, served straight from raw.githubusercontent.com),
+        # regardless of whether the YouTube upload ran.
+        id: preview
+        run: |
+          set -euo pipefail
+          mkdir -p previews
+          cp "${{ steps.generate.outputs.video_path }}" previews/latest.mp4
+          git config user.name "la-regie-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add previews/latest.mp4
+          if git diff --cached --quiet; then
+            echo "preview video unchanged, nothing to commit"
+          else
+            git commit -m "Preview: ${{ steps.pick.outputs.subject }}"
+            git pull --rebase origin "${{ github.ref_name }}"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
+
       - name: Upload the video as a workflow artifact
-        # Kept even after a successful YouTube upload, as a backup / for
-        # manual review before the retention window expires.
+        # Extra copy with its own retention window, independent of the
+        # single previews/latest.mp4 the repo keeps.
         if: always()
         uses: actions/upload-artifact@v4
         with:
