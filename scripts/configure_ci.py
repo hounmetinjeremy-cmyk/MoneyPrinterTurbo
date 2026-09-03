@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Materialize config.toml for CI runs from config.example.toml + secrets.
+
+The CLI (cli.py) covers most per-run settings as flags, but a handful of
+values have no flag and only ever come from config.toml: the LLM
+provider/key and the character overlay toggle. This script patches just
+those lines onto a fresh copy of config.example.toml, so every other
+setting keeps the example file's shipped default.
+
+Fails loudly (instead of silently misconfiguring a run) if an expected
+line is missing, e.g. after config.example.toml is edited upstream.
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import sys
+
+EXAMPLE = "config.example.toml"
+TARGET = "config.toml"
+
+
+def replace_line(text: str, old: str, new: str) -> str:
+    if old not in text:
+        raise SystemExit(
+            f"expected line not found in {EXAMPLE}, config.example.toml may have "
+            f"changed and scripts/configure_ci.py needs updating: {old!r}"
+        )
+    return text.replace(old, new, 1)
+
+
+def main() -> None:
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not gemini_key:
+        print("GEMINI_API_KEY is not set", file=sys.stderr)
+        raise SystemExit(1)
+
+    shutil.copyfile(EXAMPLE, TARGET)
+    with open(TARGET, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    text = replace_line(text, 'llm_provider = "moonshot"', 'llm_provider = "gemini"')
+    text = replace_line(text, 'gemini_api_key = ""', f'gemini_api_key = "{gemini_key}"')
+    text = replace_line(text, 'video_source = "pexels"', 'video_source = "local"')
+    text = replace_line(
+        text,
+        "# character_overlay_enabled = false",
+        "character_overlay_enabled = true",
+    )
+
+    with open(TARGET, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(f"wrote {TARGET}")
+
+
+if __name__ == "__main__":
+    main()
