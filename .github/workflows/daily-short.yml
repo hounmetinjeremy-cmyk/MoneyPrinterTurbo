@@ -90,7 +90,8 @@ jobs:
           uv run --no-sync python cli.py \
             --video-subject "${{ steps.pick.outputs.subject }}" \
             --video-aspect 9:16 \
-            --paragraph-number 6 \
+            --paragraph-number 3 \
+            --video-clip-duration 8 \
             --voice-name fr-FR-DeniseNeural \
             --stop-at video \
             | tee cli_output.log
