@@ -65,7 +65,10 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.subject }}" ]; then
             SUBJECT="${{ inputs.subject }}"
           elif [ "${{ github.event_name }}" = "push" ]; then
-            SUBJECT=$(grep -v '^#' control/run_now.txt | grep -v '^[[:space:]]*$' | head -n1 || true)
+            # La Régie can send a multi-line subject (e.g. a pasted multi-part
+            # description); join every non-comment, non-empty line into one
+            # string instead of only reading the first line.
+            SUBJECT=$(grep -v '^#' control/run_now.txt | grep -v '^[[:space:]]*$' | paste -sd ' ' - || true)
           fi
           if [ -z "$SUBJECT" ]; then
             SUBJECT=$(grep -v '^#' control/subjects.txt | grep -v '^[[:space:]]*$' | shuf -n1 || true)
