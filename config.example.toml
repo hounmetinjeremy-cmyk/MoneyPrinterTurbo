@@ -592,3 +592,24 @@ open_task_folder_on_completion = true
 # subtitle_background_enabled = false
 # subtitle_background_color = "#000000"
 # rounded_subtitle_background = false
+
+# -----------------------------------------------------------------------------
+# Character Overlay / 固定角色画中画
+# -----------------------------------------------------------------------------
+# Keep the same recurring person/character visible in every generated video,
+# regardless of which background source (Pexels, local, ...) provides the
+# footage. Drop one or more photos (.jpg/.jpeg/.png) of that person into
+# storage/character_photos/ — created automatically on first use. Each
+# generation picks one at random and overlays it as a fixed picture-in-picture
+# corner badge on top of the finished video. Pure image compositing (no AI,
+# no GPU) — runs fine on a free GitHub Actions CPU runner.
+#
+# 固定角色画中画：无论背景素材来自 Pexels 还是本地视频，都在每条成片上叠加
+# 同一个人物角色。把该角色的照片（.jpg/.jpeg/.png）放进
+# storage/character_photos/（首次使用时自动创建），每次生成会随机挑选一张，
+# 以贴边画中画的形式叠加在成片右下角（默认）。纯图像合成，不涉及 AI 或 GPU，
+# 可以在免费的 GitHub Actions CPU runner 上正常运行。
+# character_overlay_enabled = false
+# character_overlay_position = "bottom_right" # "bottom_right", "bottom_left", "top_right", "top_left"
+# character_overlay_scale = 0.28               # Fraction of video width
+# character_overlay_margin = 24                # Pixels from the edges

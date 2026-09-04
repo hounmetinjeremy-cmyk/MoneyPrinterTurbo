@@ -1,0 +1,163 @@
+name: Daily Short
+
+# Three ways in:
+#   - schedule: the unattended daily run, picks a random line from
+#     control/subjects.txt
+#   - push to control/run_now.txt: what "La Régie" (the mobile control
+#     page) triggers when you tap "Lancer maintenant"
+#   - workflow_dispatch: a manual run from the GitHub Actions UI, with an
+#     optional subject override
+on:
+  schedule:
+    - cron: "0 8 * * *" # 08:00 UTC daily — adjust to taste
+  push:
+    branches:
+      - main
+    paths:
+      - control/run_now.txt
+  workflow_dispatch:
+    inputs:
+      subject:
+        description: "Video subject (leave empty to pick one from control/subjects.txt)"
+        required: false
+        default: ""
+
+concurrency:
+  group: daily-short
+  cancel-in-progress: false
+
+permissions:
+  contents: write # needed to push the preview video back to the repo
+
+jobs:
+  generate-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install project dependencies
+        run: uv sync --frozen --python 3.11
+
+      - name: Install YouTube upload dependencies
+        # Kept out of pyproject.toml/uv.lock on purpose — the project itself
+        # doesn't use the raw YouTube API (it integrates upload-post.com
+        # instead), so this stays a CI-only addition on top of the synced venv.
+        run: uv pip install google-api-python-client google-auth
+
+      - name: Pick today's subject
+        id: pick
+        run: |
+          set -euo pipefail
+          SUBJECT=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.subject }}" ]; then
+            SUBJECT="${{ inputs.subject }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            SUBJECT=$(grep -v '^#' control/run_now.txt | grep -v '^[[:space:]]*$' | head -n1 || true)
+          fi
+          if [ -z "$SUBJECT" ]; then
+            SUBJECT=$(grep -v '^#' control/subjects.txt | grep -v '^[[:space:]]*$' | shuf -n1 || true)
+          fi
+          if [ -z "$SUBJECT" ]; then
+            echo "::error::No subject available — control/subjects.txt is empty and no subject was provided."
+            exit 1
+          fi
+          echo "Selected subject: $SUBJECT"
+          echo "subject=$SUBJECT" >> "$GITHUB_OUTPUT"
+
+      - name: Configure config.toml from secrets
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: uv run --no-sync python scripts/configure_ci.py
+
+      - name: Generate the video
+        id: generate
+        run: |
+          set -euo pipefail
+          uv run --no-sync python cli.py \
+            --video-subject "${{ steps.pick.outputs.subject }}" \
+            --video-source local \
+            --video-aspect 9:16 \
+            --paragraph-number 6 \
+            --voice-name fr-FR-DeniseNeural \
+            --stop-at video \
+            | tee cli_output.log
+          VIDEO_PATH=$(uv run --no-sync python -c "
+          import json
+          with open('cli_output.log', encoding='utf-8') as f:
+              lines = [l for l in f if l.strip()]
+          print(json.loads(lines[-1])['result']['videos'][0])
+          ")
+          echo "video_path=$VIDEO_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether YouTube secrets are configured
+        # Lets the pipeline be used purely for testing/preview (via La
+        # Régie's "Voir la dernière vidéo") before the YouTube OAuth secrets
+        # exist — the upload step below is skipped cleanly instead of
+        # failing the whole run when any of the three is missing.
+        id: ytcheck
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: |
+          if [ -n "$YT_CLIENT_ID" ] && [ -n "$YT_CLIENT_SECRET" ] && [ -n "$YT_REFRESH_TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::YouTube secrets are not fully configured — skipping upload, video stays a preview only."
+          fi
+
+      - name: Upload to YouTube
+        if: steps.ytcheck.outputs.configured == 'true'
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: |
+          uv run --no-sync python scripts/upload_youtube.py \
+            "${{ steps.generate.outputs.video_path }}" \
+            "${{ steps.pick.outputs.subject }}"
+
+      - name: Save preview video to the repo
+        # Always keeps the latest render reachable from La Régie
+        # (previews/latest.mp4, served straight from raw.githubusercontent.com),
+        # regardless of whether the YouTube upload ran.
+        id: preview
+        run: |
+          set -euo pipefail
+          mkdir -p previews
+          cp "${{ steps.generate.outputs.video_path }}" previews/latest.mp4
+          git config user.name "la-regie-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add previews/latest.mp4
+          if git diff --cached --quiet; then
+            echo "preview video unchanged, nothing to commit"
+          else
+            git commit -m "Preview: ${{ steps.pick.outputs.subject }}"
+            git pull --rebase origin "${{ github.ref_name }}"
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
+
+      - name: Upload the video as a workflow artifact
+        # Extra copy with its own retention window, independent of the
+        # single previews/latest.mp4 the repo keeps.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: short-${{ github.run_id }}
+          path: ${{ steps.generate.outputs.video_path }}
+          retention-days: 7
+          if-no-files-found: ignore
