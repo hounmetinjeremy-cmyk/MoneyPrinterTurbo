@@ -35,13 +35,21 @@ def main() -> None:
         print("GEMINI_API_KEY is not set", file=sys.stderr)
         raise SystemExit(1)
 
+    pexels_key = os.environ.get("PEXELS_API_KEY", "")
+    if not pexels_key:
+        print("PEXELS_API_KEY is not set", file=sys.stderr)
+        raise SystemExit(1)
+
     shutil.copyfile(EXAMPLE, TARGET)
     with open(TARGET, "r", encoding="utf-8") as f:
         text = f.read()
 
     text = replace_line(text, 'llm_provider = "moonshot"', 'llm_provider = "gemini"')
     text = replace_line(text, 'gemini_api_key = ""', f'gemini_api_key = "{gemini_key}"')
-    text = replace_line(text, 'video_source = "pexels"', 'video_source = "local"')
+    # video_source stays "pexels" (config.example.toml's shipped default) — the
+    # character overlay is an independent corner picture-in-picture, it does
+    # not require the background footage itself to be local.
+    text = replace_line(text, "pexels_api_keys = []", f'pexels_api_keys = ["{pexels_key}"]')
     text = replace_line(
         text,
         "# character_overlay_enabled = false",
