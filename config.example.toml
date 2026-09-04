@@ -613,3 +613,15 @@ open_task_folder_on_completion = true
 # character_overlay_position = "bottom_right" # "bottom_right", "bottom_left", "top_right", "top_left"
 # character_overlay_scale = 0.28               # Fraction of video width
 # character_overlay_margin = 24                # Pixels from the edges
+
+# -----------------------------------------------------------------------------
+# Duration Cap / 时长上限
+# -----------------------------------------------------------------------------
+# Script length (paragraph_number) only controls duration indirectly — actual
+# voiceover length varies with what the LLM writes. When set, the finished
+# video is trimmed to at most this many seconds right before it's written out,
+# so "at most N seconds" holds regardless of script-length variance.
+#
+# 脚本时长只能通过 paragraph_number 间接控制，配音实际时长会随 LLM 输出浮动。
+# 设置该值后，成片写出前会被裁剪到不超过这个秒数，保证"最多 N 秒"始终成立。
+# max_duration_seconds = 60

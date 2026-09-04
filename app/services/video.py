@@ -1455,11 +1455,22 @@ def generate_video(
 
         final_video_clip = video_clip.with_audio(audio_clip)
         clip_stack.callback(final_video_clip.close)
+
+        max_duration = getattr(params, "max_duration_seconds", None)
+        if max_duration and final_video_clip.duration > max_duration:
+            logger.info(
+                f"  ⑦ trimming to max_duration_seconds: "
+                f"{final_video_clip.duration:.1f}s -> {max_duration:.1f}s"
+            )
+            trimmed_clip = final_video_clip.subclipped(0, max_duration)
+            clip_stack.callback(trimmed_clip.close)
+            final_video_clip = trimmed_clip
+
         # 显式沿用输入音频的采样率；如果取不到，再回退 MoviePy 默认的 44100Hz。
         # 这样可以减少不同环境，尤其 Docker 中再次重采样带来的音质波动。
         output_audio_fps = int(getattr(audio_clip, "fps", 0) or 44100)
-        _write_videofile_with_codec_fallback(
-            final_video_clip,
+
+        write_kwargs = dict(
             output_file=output_file,
             codec=_get_configured_video_codec(),
             audio_codec=audio_codec,
@@ -1470,6 +1481,15 @@ def generate_video(
             logger=None,
             fps=fps,
         )
+        # "veryfast" cuts x264 encode time substantially versus MoviePy's
+        # "medium" default, at a bitrate/quality cost that's a non-issue for
+        # short social clips. Only applied when the effective codec is the
+        # default libx264 — a hardware encoder (nvenc/qsv/...) uses a
+        # different preset vocabulary and must keep using its own defaults.
+        if _get_configured_video_codec() == _DEFAULT_VIDEO_CODEC:
+            write_kwargs["preset"] = "veryfast"
+
+        _write_videofile_with_codec_fallback(final_video_clip, **write_kwargs)
         return bgm_mix_succeeded
 
 

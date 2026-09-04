@@ -151,6 +151,13 @@ class VideoParams(BaseModel):
         default=config.ui.get("character_overlay_margin", 24), ge=0
     )
 
+    # 硬性时长上限（秒）：脚本长度由 paragraph_number 间接控制，实际配音时长
+    # 会因 LLM 输出长短浮动。设置该值后，成片在最终写出前会被裁剪到不超过
+    # 这个时长，保证"最多 N 秒"这个约束始终成立，不依赖脚本长度调参的运气。
+    max_duration_seconds: Optional[float] = Field(
+        default=config.ui.get("max_duration_seconds", None), gt=0
+    )
+
 
 class SubtitleRequest(BaseModel):
     video_script: str

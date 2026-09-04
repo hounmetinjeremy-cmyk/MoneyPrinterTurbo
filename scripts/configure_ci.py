@@ -62,6 +62,7 @@ def main() -> None:
         "# character_overlay_enabled = false",
         "character_overlay_enabled = true",
     )
+    text = replace_line(text, "# max_duration_seconds = 60", "max_duration_seconds = 60")
 
     with open(TARGET, "w", encoding="utf-8") as f:
         f.write(text)
