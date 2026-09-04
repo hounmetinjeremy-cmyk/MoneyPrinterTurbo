@@ -46,6 +46,13 @@ def main() -> None:
 
     text = replace_line(text, 'llm_provider = "moonshot"', 'llm_provider = "gemini"')
     text = replace_line(text, 'gemini_api_key = ""', f'gemini_api_key = "{gemini_key}"')
+    # Leaving gemini_model_name empty lets the app fall back to its Pro-tier
+    # registry default, which Google removed from the free tier in April
+    # 2026 (429 RESOURCE_EXHAUSTED, limit: 0). Pin an actual free-tier
+    # Flash model instead.
+    text = replace_line(
+        text, 'gemini_model_name = ""', 'gemini_model_name = "gemini-3.5-flash"'
+    )
     # video_source stays "pexels" (config.example.toml's shipped default) — the
     # character overlay is an independent corner picture-in-picture, it does
     # not require the background footage itself to be local.
