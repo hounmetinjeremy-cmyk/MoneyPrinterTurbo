@@ -1,4 +1,8 @@
-On continue sur le pipeline actuel pour tester proprement avec le vrai sujet du menuisier.
-​Par contre, on a besoin d'améliorer un point important sur l'interface utilisateur : je veux qu'on puisse voir clairement en direct le temps de génération en secondes pendant que la vidéo se crée, et surtout voir s'il y a une erreur qui s'affiche directement dans l'interface si le processus plante, au lieu d'attendre dans le vide.
-​Est-ce que tu peux ajouter cet affichage du statut et du temps sur l'interface ?
-# déclenché 2026-09-05T00:02:17.938Z
+J'ai un plan précis en tête pour le système de génération de nos vidéos, et je veux ton avis d'expert :
+Est-ce que tu penses que c'est possible et viable de mettre en place ce plan pour faire sortir une excellente vidéo ?
+Le plan en question :
+Découpage : On récupère plusieurs vidéos (via Pexels ou autre), et le système les découpe automatiquement en micro-morceaux de quelques secondes pour isoler les mouvements clés.
+Stockage & Indexation : On stocke ces morceaux dans notre base de données (comme Supabase) avec une recherche vectorielle.
+Assemblage intelligent : Quand un prompt est donné, le système cherche par similarité vectorielle le meilleur template de mouvement pour faire l'assemblage rapidement et obtenir le bon visuel.
+Dis-moi si selon toi c'est réalisable avec notre code actuel et si ça peut donner un bon résultat propre. »
+# déclenché 2026-09-05T00:03:32.154Z
