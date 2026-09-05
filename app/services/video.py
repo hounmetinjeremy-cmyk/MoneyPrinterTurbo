@@ -12,7 +12,7 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, redirect_stdout
 from functools import lru_cache
-from typing import List, Optional
+from typing import List
 from loguru import logger
 import numpy as np
 from moviepy import (
