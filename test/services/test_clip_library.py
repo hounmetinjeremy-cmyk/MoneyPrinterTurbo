@@ -49,42 +49,46 @@ class TestMotionAndFaceScoring(unittest.TestCase):
         score = clip_library.compute_motion_score(black, white)
         self.assertGreater(score, 0.9)
 
+    def _mock_cascades(self, *, all_empty: bool = True):
+        """Three mock cascades standing in for _FACE_CASCADE_FILES, all
+        reporting no detections by default so a test only has to override
+        the one call it cares about."""
+        from unittest.mock import MagicMock
+
+        cascades = [MagicMock() for _ in range(3)]
+        if all_empty:
+            for cascade in cascades:
+                cascade.detectMultiScale.return_value = []
+        return cascades
+
     def test_frame_has_visible_face_uses_cascade_detection(self):
         """
         Detection quality itself belongs to OpenCV's own test suite — this
-        only verifies frame_has_visible_face reports whatever the cascades
-        found, so the rest of the pipeline's face-filtering logic can be
-        tested deterministically without needing a real photographed face.
+        only verifies frame_has_visible_face reports whatever the cascade
+        ensemble found, so the rest of the pipeline's face-filtering logic
+        can be tested deterministically without needing a real photographed
+        face.
         """
         frame = np.zeros((48, 48, 3), dtype=np.uint8)
-        with (
-            patch.object(clip_library, "_face_cascade") as mock_frontal_getter,
-            patch.object(clip_library, "_profile_cascade") as mock_profile_getter,
-        ):
-            mock_frontal_getter.return_value.detectMultiScale.return_value = []
-            mock_profile_getter.return_value.detectMultiScale.return_value = []
+        cascades = self._mock_cascades()
+        with patch.object(clip_library, "_face_cascades", return_value=cascades):
             self.assertFalse(clip_library.frame_has_visible_face(frame))
 
-            mock_frontal_getter.return_value.detectMultiScale.return_value = [
-                (5, 5, 20, 20)
-            ]
+            cascades[0].detectMultiScale.return_value = [(5, 5, 20, 20)]
             self.assertTrue(clip_library.frame_has_visible_face(frame))
 
-    def test_frame_has_visible_face_catches_a_profile_the_frontal_cascade_misses(self):
+    def test_frame_has_visible_face_catches_a_pose_the_first_cascade_misses(self):
         """
-        A frontal-only cascade misses someone turned to the side or looking
-        down at their work — exactly the poses common in "hands using tools"
-        footage. The profile cascade must be consulted too, not just frontal.
+        Each cascade in the ensemble is trained slightly differently and
+        misses different true positives — someone turned to the side or
+        looking down at their work, exactly the poses common in "hands using
+        tools" footage. A hit on ANY cascade in the ensemble must count,
+        not just the first one.
         """
         frame = np.zeros((48, 48, 3), dtype=np.uint8)
-        with (
-            patch.object(clip_library, "_face_cascade") as mock_frontal_getter,
-            patch.object(clip_library, "_profile_cascade") as mock_profile_getter,
-        ):
-            mock_frontal_getter.return_value.detectMultiScale.return_value = []
-            mock_profile_getter.return_value.detectMultiScale.return_value = [
-                (5, 5, 20, 20)
-            ]
+        cascades = self._mock_cascades()
+        cascades[-1].detectMultiScale.return_value = [(5, 5, 20, 20)]
+        with patch.object(clip_library, "_face_cascades", return_value=cascades):
             self.assertTrue(clip_library.frame_has_visible_face(frame))
 
     def test_frame_has_visible_face_checks_the_flipped_frame_too(self):
@@ -94,16 +98,10 @@ class TestMotionAndFaceScoring(unittest.TestCase):
         before re-checking, or it's missed entirely.
         """
         frame = np.zeros((48, 48, 3), dtype=np.uint8)
-        with (
-            patch.object(clip_library, "_face_cascade") as mock_frontal_getter,
-            patch.object(clip_library, "_profile_cascade") as mock_profile_getter,
-        ):
-            mock_frontal_getter.return_value.detectMultiScale.return_value = []
-            # Not found on the frame as-is, but found once flipped.
-            mock_profile_getter.return_value.detectMultiScale.side_effect = [
-                [],
-                [(5, 5, 20, 20)],
-            ]
+        cascades = self._mock_cascades()
+        # Not found on the frame as-is, but found once flipped.
+        cascades[-1].detectMultiScale.side_effect = [[], [(5, 5, 20, 20)]]
+        with patch.object(clip_library, "_face_cascades", return_value=cascades):
             self.assertTrue(clip_library.frame_has_visible_face(frame))
 
 

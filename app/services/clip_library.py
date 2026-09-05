@@ -18,11 +18,25 @@ import numpy as np
 
 from app.utils import utils
 
-# Loaded lazily (see _face_cascade()/_profile_cascade()) so importing this
-# module — and running the pure-logic unit tests below — never requires an
-# OpenCV/GUI-capable environment or the Haar cascade data files to be present.
-_FACE_CASCADE = None
-_PROFILE_CASCADE = None
+# Loaded lazily (see _face_cascades()) so importing this module — and
+# running the pure-logic unit tests below — never requires an OpenCV/GUI-
+# capable environment or the Haar cascade data files to be present.
+_FACE_CASCADES = None
+
+# An ensemble, not one cascade: each of these is trained slightly differently
+# and misses different true positives, so OR-ing them together catches more
+# real faces than any single one — at the cost of some extra false
+# positives, which is the right tradeoff here (a segment wrongly discarded
+# just means one fewer clip; a segment wrongly kept means a stranger's face
+# in a published video).
+# haarcascade_profileface.xml only reliably matches one facing direction, so
+# it's run on each frame both as-is and horizontally flipped (see
+# frame_has_visible_face) to catch a profile turned either way.
+_FACE_CASCADE_FILES = (
+    "haarcascade_frontalface_default.xml",
+    "haarcascade_frontalface_alt2.xml",
+    "haarcascade_profileface.xml",
+)
 
 # A frame is judged to contain a visible face at this minimum size, expressed
 # as a fraction of frame width — this filters out tiny incidental faces (a
@@ -30,26 +44,16 @@ _PROFILE_CASCADE = None
 _MIN_FACE_SIZE_FRACTION = 0.08
 
 
-def _face_cascade():
-    global _FACE_CASCADE
-    if _FACE_CASCADE is None:
+def _face_cascades():
+    global _FACE_CASCADES
+    if _FACE_CASCADES is None:
         import cv2
 
-        _FACE_CASCADE = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
-    return _FACE_CASCADE
-
-
-def _profile_cascade():
-    global _PROFILE_CASCADE
-    if _PROFILE_CASCADE is None:
-        import cv2
-
-        _PROFILE_CASCADE = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_profileface.xml"
-        )
-    return _PROFILE_CASCADE
+        _FACE_CASCADES = [
+            cv2.CascadeClassifier(cv2.data.haarcascades + name)
+            for name in _FACE_CASCADE_FILES
+        ]
+    return _FACE_CASCADES
 
 
 def frame_has_visible_face(frame: np.ndarray) -> bool:
@@ -62,34 +66,28 @@ def frame_has_visible_face(frame: np.ndarray) -> bool:
     trying to solve lip-sync on footage of people who have nothing to do
     with the day's script.
 
-    A frontal-only cascade systematically misses exactly the poses this
-    footage is full of: someone looking down at their hands/tools while
-    working, or turned to the side. haarcascade_profileface.xml is trained
-    on one facing direction, so it's run on the frame both as-is and
-    horizontally flipped to catch a profile turned either way. This still
-    won't catch a face pointed straight down at the work (no Haar cascade
-    handles that pose) — segments should still be spot-checked, this cuts
-    down the miss rate rather than eliminating it entirely.
+    Runs an ensemble of Haar cascades (see _face_cascades()) rather than a
+    single frontal-only one, which systematically misses exactly the poses
+    this footage is full of: someone looking down at their hands/tools while
+    working, or turned to the side. This still won't catch a face pointed
+    straight down at the work (no Haar cascade handles that pose) —
+    segments should still be spot-checked, this cuts down the miss rate
+    rather than eliminating it entirely.
     """
     import cv2
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    flipped = cv2.flip(gray, 1)
     min_size = int(frame.shape[1] * _MIN_FACE_SIZE_FRACTION)
 
-    def _any_detected(image) -> bool:
-        frontal = _face_cascade().detectMultiScale(
-            image, scaleFactor=1.1, minNeighbors=5, minSize=(min_size, min_size)
-        )
-        if len(frontal) > 0:
-            return True
-        profile = _profile_cascade().detectMultiScale(
-            image, scaleFactor=1.1, minNeighbors=5, minSize=(min_size, min_size)
-        )
-        return len(profile) > 0
-
-    if _any_detected(gray):
-        return True
-    return _any_detected(cv2.flip(gray, 1))
+    for cascade in _face_cascades():
+        for image in (gray, flipped):
+            detected = cascade.detectMultiScale(
+                image, scaleFactor=1.1, minNeighbors=5, minSize=(min_size, min_size)
+            )
+            if len(detected) > 0:
+                return True
+    return False
 
 
 def compute_motion_score(prev_frame: np.ndarray, curr_frame: np.ndarray) -> float:
@@ -121,13 +119,16 @@ class SegmentAnalysis:
 def analyze_video_segments(
     video_path: str,
     segment_duration: float = 6.0,
-    sample_stride_frames: int = 5,
+    sample_stride_frames: int = 2,
 ) -> List[SegmentAnalysis]:
     """
     Split a video into fixed-length segments and score each one for face
     presence and motion, without decoding every single frame — sampling
     every `sample_stride_frames`-th frame keeps this fast enough to run over
-    a day's worth of stock footage in a scheduled job.
+    a day's worth of stock footage in a scheduled job. Kept fairly dense (a
+    face only has to appear on one sampled frame within a segment to sink
+    it) since the cost of a missed face is much higher than the cost of a
+    slower cron.
     """
     import cv2
 
