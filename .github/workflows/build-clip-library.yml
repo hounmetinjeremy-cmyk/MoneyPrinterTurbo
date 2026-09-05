@@ -1,0 +1,54 @@
+name: Build Clip Library
+
+# Daily, offline job: downloads a rotating slice of control/subjects.txt's
+# stock footage, keeps only "pure movement" segments (no visible face, real
+# motion — see app/services/clip_library.py), and stores them in Supabase
+# (Storage for the files, mpt.movement_clips for the metadata + text
+# embedding). Deliberately separate from daily-short.yml: this builds up a
+# reusable library over time rather than fetching fresh footage per run, and
+# is not on the critical path of any single day's video.
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC daily — offset from daily-short.yml's 08:00
+  workflow_dispatch: {}
+
+concurrency:
+  group: build-clip-library
+  cancel-in-progress: false
+
+jobs:
+  build-library:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install project dependencies
+        run: uv sync --frozen --python 3.11
+
+      - name: Configure config.toml from secrets
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+        run: uv run --no-sync python scripts/configure_ci.py
+
+      - name: Build today's clip library slice
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: uv run --no-sync python scripts/build_clip_library.py
