@@ -1770,66 +1770,82 @@ def download_videos(
     material_sources: list[dict[str, Any]] = []
     total_duration = 0.0
 
-    # Optional pre-fill from the indexed movement-clip library (see
-    # app.services.movement_library) — retrieval by topic similarity
-    # instead of a live Pexels search. Purely additive: whatever duration
-    # this doesn't cover, the existing search below still fills, exactly as
-    # if the library had found nothing at all. The library is populated by
-    # a separate daily cron (scripts/build_clip_library.py) and starts
-    # empty, so this must never be the only source of material.
+    # When the movement-clip library is enabled (see
+    # app.services.movement_library), it is the *only* source of material —
+    # not a pre-fill with a live-search top-up. Pexels/other live stock
+    # search stays reserved for scripts/build_clip_library.py, the separate
+    # daily cron that fills the library in advance; generation itself must
+    # never reach out to a live stock API. If the library doesn't have
+    # enough (or any) matching clips for this subject, that's a
+    # configuration/coverage problem to fix — not something to silently
+    # paper over with a live search — so this raises instead of falling
+    # through to the code below.
     if config.app.get("use_movement_library", False):
         gemini_api_key = config.app.get("gemini_api_key", "")
         supabase_url = os.environ.get("SUPABASE_URL", "")
         service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-        if gemini_api_key and supabase_url and service_role_key:
-            try:
-                library_clips = movement_library.fetch_movement_clips_for_subject(
-                    search_terms=search_terms,
-                    required_duration=audio_duration,
-                    max_clip_duration=max_clip_duration,
-                    material_directory=material_directory,
-                    gemini_api_key=gemini_api_key,
-                    supabase_url=supabase_url,
-                    service_role_key=service_role_key,
-                )
-            except Exception as e:
-                logger.error(f"movement library retrieval failed, falling back: {e}")
-                library_clips = []
-
-            for clip in library_clips:
-                video_paths.append(clip.local_path)
-                item = MaterialInfo(
-                    provider="movement_library",
-                    duration=int(clip.duration_seconds),
-                    source_info={
-                        "provider": "movement_library",
-                        "asset_id": clip.source_asset_id,
-                        "search_term": ", ".join(clip.keywords),
-                    },
-                )
-                try:
-                    material_sources.append(
-                        _material_source_record(item, clip.local_path)
-                    )
-                except Exception as source_error:
-                    logger.warning(
-                        "failed to prepare movement library source record: "
-                        f"{source_error}"
-                    )
-                total_duration += min(max_clip_duration, clip.duration_seconds)
-        else:
-            logger.warning(
-                "use_movement_library is enabled but SUPABASE_URL / "
-                "SUPABASE_SERVICE_ROLE_KEY are not configured, skipping"
+        if not (gemini_api_key and supabase_url and service_role_key):
+            raise RuntimeError(
+                "use_movement_library is enabled but gemini_api_key / "
+                "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not fully "
+                "configured. Live stock-video search is disabled while the "
+                "movement library is enabled, so generation cannot fall "
+                "back to it — fix the configuration or disable "
+                "use_movement_library."
             )
 
-    if total_duration > audio_duration:
-        logger.info(
-            f"movement library alone covered the required duration "
-            f"({total_duration:.1f}s of {audio_duration:.1f}s needed), "
-            "skipping live search"
+        library_clips = movement_library.fetch_movement_clips_for_subject(
+            search_terms=search_terms,
+            required_duration=audio_duration,
+            max_clip_duration=max_clip_duration,
+            material_directory=material_directory,
+            gemini_api_key=gemini_api_key,
+            supabase_url=supabase_url,
+            service_role_key=service_role_key,
         )
-        logger.success(f"downloaded {len(video_paths)} videos")
+
+        for clip in library_clips:
+            video_paths.append(clip.local_path)
+            item = MaterialInfo(
+                provider="movement_library",
+                duration=int(clip.duration_seconds),
+                source_info={
+                    "provider": "movement_library",
+                    "asset_id": clip.source_asset_id,
+                    "search_term": ", ".join(clip.keywords),
+                },
+            )
+            try:
+                material_sources.append(
+                    _material_source_record(item, clip.local_path)
+                )
+            except Exception as source_error:
+                logger.warning(
+                    "failed to prepare movement library source record: "
+                    f"{source_error}"
+                )
+            total_duration += min(max_clip_duration, clip.duration_seconds)
+
+        if not video_paths:
+            raise RuntimeError(
+                "movement library has no clips matching this subject "
+                f"(search_terms={search_terms}) — run "
+                "scripts/build_clip_library.py to index this topic first, "
+                "or broaden control/subjects.txt. Live stock-video search "
+                "is disabled while use_movement_library is enabled."
+            )
+
+        if total_duration < audio_duration:
+            logger.warning(
+                f"movement library only covered {total_duration:.1f}s of "
+                f"{audio_duration:.1f}s needed with {len(video_paths)} "
+                "clips — the final video will loop them to fill the "
+                "remaining duration instead of reaching for a live search"
+            )
+        logger.success(
+            f"downloaded {len(video_paths)} videos from the movement "
+            f"library ({total_duration:.1f}s of {audio_duration:.1f}s needed)"
+        )
         _persist_material_sources(task_id, material_sources)
         return video_paths
 

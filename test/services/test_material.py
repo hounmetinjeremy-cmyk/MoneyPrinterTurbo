@@ -1676,15 +1676,17 @@ class TestWaveSpeedProvider(unittest.TestCase):
 
 class TestMovementLibraryIntegration(unittest.TestCase):
     """
-    download_videos()'s optional movement-library pre-fill (see
-    app.services.movement_library) — purely additive, must fall back to the
-    existing Pexels search for whatever duration it doesn't cover, and must
-    never itself break generation.
+    download_videos()'s movement-library integration (see
+    app.services.movement_library). When use_movement_library is enabled,
+    the library is the *only* material source — generation must never fall
+    back to a live stock search. Insufficient coverage or a retrieval
+    failure must raise clearly instead of silently reaching for Pexels.
     """
 
     def tearDown(self):
         config.app.pop("use_movement_library", None)
         config.app.pop("gemini_api_key", None)
+        config.app.pop("pexels_api_keys", None)
 
     def test_disabled_by_default_never_calls_the_library(self):
         with patch.object(
@@ -1697,7 +1699,7 @@ class TestMovementLibraryIntegration(unittest.TestCase):
         fetch.assert_not_called()
         self.assertEqual(result, [])
 
-    def test_enabled_but_missing_supabase_secrets_falls_back_silently(self):
+    def test_enabled_but_missing_supabase_secrets_raises(self):
         config.app["use_movement_library"] = True
         config.app["gemini_api_key"] = "gemini-key"
 
@@ -1709,12 +1711,12 @@ class TestMovementLibraryIntegration(unittest.TestCase):
         ):
             os.environ.pop("SUPABASE_URL", None)
             os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
-            result = material.download_videos(
-                task_id="lib-no-secrets", search_terms=[], audio_duration=30
-            )
+            with self.assertRaises(RuntimeError):
+                material.download_videos(
+                    task_id="lib-no-secrets", search_terms=[], audio_duration=30
+                )
 
         fetch.assert_not_called()
-        self.assertEqual(result, [])
 
     def test_library_alone_covering_required_duration_skips_live_search(self):
         config.app["use_movement_library"] = True
@@ -1752,7 +1754,7 @@ class TestMovementLibraryIntegration(unittest.TestCase):
         pexels_search.assert_not_called()
         self.assertEqual(result, ["/tmp/movement-abc.mp4"])
 
-    def test_partial_library_coverage_falls_back_for_the_remainder(self):
+    def test_partial_library_coverage_returns_only_library_clips(self):
         config.app["use_movement_library"] = True
         config.app["gemini_api_key"] = "gemini-key"
         config.app["pexels_api_keys"] = ["pexels-key"]
@@ -1761,12 +1763,6 @@ class TestMovementLibraryIntegration(unittest.TestCase):
             duration_seconds=5.0,
             keywords=["hammer"],
             source_asset_id="abc-0",
-        )
-        pexels_item = material.MaterialInfo(
-            provider="pexels",
-            url="https://cdn.example.com/pexels.mp4",
-            duration=20,
-            source_info={"provider": "pexels", "asset_id": "999"},
         )
 
         with (
@@ -1782,8 +1778,7 @@ class TestMovementLibraryIntegration(unittest.TestCase):
                 "fetch_movement_clips_for_subject",
                 return_value=[library_clip],
             ),
-            patch.object(material, "search_videos_pexels", return_value=[pexels_item]),
-            patch.object(material, "save_video", return_value="/tmp/pexels-999.mp4"),
+            patch.object(material, "search_videos_pexels") as pexels_search,
         ):
             result = material.download_videos(
                 task_id="lib-partial",
@@ -1792,18 +1787,43 @@ class TestMovementLibraryIntegration(unittest.TestCase):
                 max_clip_duration=20,
             )
 
-        self.assertEqual(result, ["/tmp/movement-abc.mp4", "/tmp/pexels-999.mp4"])
+        pexels_search.assert_not_called()
+        self.assertEqual(result, ["/tmp/movement-abc.mp4"])
 
-    def test_library_failure_falls_back_to_live_search_without_raising(self):
+    def test_no_matching_clips_raises_instead_of_falling_back(self):
         config.app["use_movement_library"] = True
         config.app["gemini_api_key"] = "gemini-key"
         config.app["pexels_api_keys"] = ["pexels-key"]
-        pexels_item = material.MaterialInfo(
-            provider="pexels",
-            url="https://cdn.example.com/pexels.mp4",
-            duration=20,
-            source_info={"provider": "pexels", "asset_id": "999"},
-        )
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "SUPABASE_URL": "https://x.supabase.co",
+                    "SUPABASE_SERVICE_ROLE_KEY": "service-key",
+                },
+            ),
+            patch.object(
+                material.movement_library,
+                "fetch_movement_clips_for_subject",
+                return_value=[],
+            ),
+            patch.object(material, "search_videos_pexels") as pexels_search,
+        ):
+            with self.assertRaises(RuntimeError):
+                material.download_videos(
+                    task_id="lib-empty",
+                    search_terms=["hammer"],
+                    audio_duration=15,
+                    max_clip_duration=20,
+                )
+
+        pexels_search.assert_not_called()
+
+    def test_library_failure_raises_instead_of_falling_back(self):
+        config.app["use_movement_library"] = True
+        config.app["gemini_api_key"] = "gemini-key"
+        config.app["pexels_api_keys"] = ["pexels-key"]
 
         with (
             patch.dict(
@@ -1818,17 +1838,17 @@ class TestMovementLibraryIntegration(unittest.TestCase):
                 "fetch_movement_clips_for_subject",
                 side_effect=RuntimeError("supabase unreachable"),
             ),
-            patch.object(material, "search_videos_pexels", return_value=[pexels_item]),
-            patch.object(material, "save_video", return_value="/tmp/pexels-999.mp4"),
+            patch.object(material, "search_videos_pexels") as pexels_search,
         ):
-            result = material.download_videos(
-                task_id="lib-error",
-                search_terms=["hammer"],
-                audio_duration=15,
-                max_clip_duration=20,
-            )
+            with self.assertRaises(RuntimeError):
+                material.download_videos(
+                    task_id="lib-error",
+                    search_terms=["hammer"],
+                    audio_duration=15,
+                    max_clip_duration=20,
+                )
 
-        self.assertEqual(result, ["/tmp/pexels-999.mp4"])
+        pexels_search.assert_not_called()
 
 
 if __name__ == "__main__":
