@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import List
 
 from loguru import logger
@@ -12,6 +12,37 @@ from app.config import config
 from app.models.llm_provider import DEFAULT_LLM_PROVIDER_ID, get_llm_provider
 
 _max_retries = 5
+# Substrings identifying a transient provider failure worth retrying (a
+# temporary overload, rate limit, or network hiccup) as opposed to a
+# configuration error (bad api_key, unknown model) that will never succeed
+# on retry. Free-tier Gemini in particular returns 503 UNAVAILABLE during
+# demand spikes that usually clear within seconds.
+_RETRYABLE_ERROR_MARKERS = (
+    "503",
+    "429",
+    "unavailable",
+    "resource_exhausted",
+    "rate limit",
+    "rate_limit",
+    "too many requests",
+    "overloaded",
+    "timeout",
+    "timed out",
+    "temporarily",
+    "connection reset",
+    "connection aborted",
+)
+
+
+def _is_retryable_llm_error(message: str) -> bool:
+    lowered = (message or "").lower()
+    return any(marker in lowered for marker in _RETRYABLE_ERROR_MARKERS)
+
+
+def _retry_backoff_seconds(attempt: int) -> float:
+    return min(2**attempt, 10)
+
+
 MIN_SCRIPT_PARAGRAPH_NUMBER = 1
 MAX_SCRIPT_PARAGRAPH_NUMBER = 10
 MAX_SCRIPT_PROMPT_LENGTH = 2000
@@ -557,6 +588,20 @@ def generate_script(
                 response = _generate_response(prompt=prompt)
             else:
                 response = _generate_response(prompt=prompt, app_config=app_config)
+
+            # _generate_response turns a provider-level failure (bad request,
+            # network error, transient 503/429) into an "Error: " string
+            # rather than raising, so a transient failure must be checked
+            # for and retried here — otherwise it looks like a (nonsensical)
+            # successful script and the loop stops on the first attempt.
+            if response.startswith("Error: "):
+                logger.warning(f"failed to generate video script: {response}")
+                if i < _max_retries - 1 and _is_retryable_llm_error(response):
+                    sleep(_retry_backoff_seconds(i))
+                    continue
+                final_script = response
+                break
+
             if response:
                 final_script = format_response(response)
             else:
@@ -673,7 +718,16 @@ Please note that you must use English for generating video search terms; Chinese
                 # 错误文案原样返回，下游只做空值判断时会把非空字符串误认为成功，
                 # 素材下载循环还会按字符遍历错误文案，产生无意义的外部请求。
                 # 这里统一返回空列表，让任务编排层在真实故障位置立即结束任务。
+                #
+                # A transient failure (e.g. Gemini free-tier 503 UNAVAILABLE
+                # during a demand spike) is worth retrying instead of giving
+                # up on the first attempt — the script call just before this
+                # one may well have succeeded, so bailing out here throws
+                # away a task that a few seconds' wait would have completed.
                 logger.error(f"failed to generate video terms: {response}")
+                if i < _max_retries - 1 and _is_retryable_llm_error(response):
+                    sleep(_retry_backoff_seconds(i))
+                    continue
                 return []
             search_terms = json.loads(_strip_code_fence(response))
             if not isinstance(search_terms, list) or not all(

@@ -182,8 +182,10 @@ jobs:
 
       - name: Upload the video as a workflow artifact
         # Extra copy with its own retention window, independent of the
-        # single previews/latest.mp4 the repo keeps.
-        if: always()
+        # single previews/latest.mp4 the repo keeps. Only runs if "Generate
+        # the video" got far enough to set its output — otherwise upload-artifact
+        # fails on a missing "path" input and masks the real failure above it.
+        if: always() && steps.generate.outputs.video_path != ''
         uses: actions/upload-artifact@v4
         with:
           name: short-${{ github.run_id }}
