@@ -84,10 +84,20 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: uv run --no-sync python scripts/configure_ci.py
 
       - name: Generate the video
         id: generate
+        # SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY: read at runtime by
+        # app.services.movement_library (see config.toml's
+        # use_movement_library, turned on above only when these secrets are
+        # present) to retrieve pre-indexed footage by topic similarity
+        # before falling back to a live Pexels search.
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
           uv run --no-sync python cli.py \

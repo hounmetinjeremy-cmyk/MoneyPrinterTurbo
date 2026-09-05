@@ -45,11 +45,10 @@ from app.models.schema import VideoAspect  # noqa: E402
 from app.services import clip_library  # noqa: E402
 from app.services.llm import generate_terms  # noqa: E402
 from app.services.material import save_video, search_videos_pexels  # noqa: E402
+from app.services.movement_library import embed_text  # noqa: E402
 
 SUBJECTS_FILE = "control/subjects.txt"
 STORAGE_BUCKET = "movement-clips"
-EMBEDDING_MODEL = "gemini-embedding-001"
-EMBEDDING_DIMENSIONS = 768  # matches mpt.movement_clips.embedding's vector(768)
 
 
 # Kept small on purpose: this runs once a day and is not on the generation
@@ -94,17 +93,6 @@ def pick_subjects(path: str, count: int) -> List[str]:
         return []
     random.shuffle(lines)
     return lines[:count]
-
-
-def embed_text(client, text: str) -> List[float]:
-    from google.genai import types
-
-    response = client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=text,
-        config=types.EmbedContentConfig(output_dimensionality=EMBEDDING_DIMENSIONS),
-    )
-    return list(response.embeddings[0].values)
 
 
 def upload_clip(
@@ -188,7 +176,7 @@ def insert_movement_clip(
 def process_subject(
     subject: str,
     *,
-    genai_client,
+    gemini_api_key: str,
     supabase_url: str,
     service_role_key: str,
     tmp_dir: str,
@@ -201,7 +189,7 @@ def process_subject(
         logger.warning(f"no search terms generated for subject, skipping: {subject}")
         return 0
 
-    embedding = embed_text(genai_client, ", ".join(search_terms))
+    embedding = embed_text(", ".join(search_terms), gemini_api_key=gemini_api_key)
     stored_count = 0
 
     for term in search_terms:
@@ -301,10 +289,6 @@ def main() -> None:
     supabase_url = _require_env("SUPABASE_URL")
     service_role_key = _require_env("SUPABASE_SERVICE_ROLE_KEY")
 
-    from google import genai
-
-    genai_client = genai.Client(api_key=gemini_api_key)
-
     subjects = pick_subjects(SUBJECTS_FILE, SUBJECTS_PER_RUN)
     if not subjects:
         logger.warning("no subjects to index today, exiting")
@@ -324,7 +308,7 @@ def main() -> None:
         for subject in subjects:
             total_stored += process_subject(
                 subject,
-                genai_client=genai_client,
+                gemini_api_key=gemini_api_key,
                 supabase_url=supabase_url,
                 service_role_key=service_role_key,
                 tmp_dir=tmp_dir,

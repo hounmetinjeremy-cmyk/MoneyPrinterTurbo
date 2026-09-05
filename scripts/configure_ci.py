@@ -10,6 +10,7 @@ setting keeps the example file's shipped default.
 Fails loudly (instead of silently misconfiguring a run) if an expected
 line is missing, e.g. after config.example.toml is edited upstream.
 """
+
 from __future__ import annotations
 
 import os
@@ -56,13 +57,29 @@ def main() -> None:
     # video_source stays "pexels" (config.example.toml's shipped default) — the
     # character overlay is an independent corner picture-in-picture, it does
     # not require the background footage itself to be local.
-    text = replace_line(text, "pexels_api_keys = []", f'pexels_api_keys = ["{pexels_key}"]')
+    text = replace_line(
+        text, "pexels_api_keys = []", f'pexels_api_keys = ["{pexels_key}"]'
+    )
     text = replace_line(
         text,
         "# character_overlay_enabled = false",
         "character_overlay_enabled = true",
     )
-    text = replace_line(text, "# max_duration_seconds = 60", "max_duration_seconds = 60")
+    text = replace_line(
+        text, "# max_duration_seconds = 60", "max_duration_seconds = 60"
+    )
+
+    # Purely additive and self-disabling when unconfigured (see
+    # config.example.toml's Movement Clip Library section), so it's safe to
+    # turn on here whenever the Supabase secrets scripts/build_clip_library.py
+    # already uses are present — no separate opt-in step needed once they're
+    # set up.
+    if os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_ROLE_KEY"):
+        text = replace_line(
+            text,
+            "# use_movement_library = false",
+            "use_movement_library = true",
+        )
 
     with open(TARGET, "w", encoding="utf-8") as f:
         f.write(text)

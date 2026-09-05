@@ -625,3 +625,28 @@ open_task_folder_on_completion = true
 # 脚本时长只能通过 paragraph_number 间接控制，配音实际时长会随 LLM 输出浮动。
 # 设置该值后，成片写出前会被裁剪到不超过这个秒数，保证"最多 N 秒"始终成立。
 # max_duration_seconds = 60
+
+# -----------------------------------------------------------------------------
+# Movement Clip Library / 动作素材库检索
+# -----------------------------------------------------------------------------
+# Retrieve background footage by topic similarity from a pre-indexed library
+# (see scripts/build_clip_library.py, a separate daily cron) instead of only
+# searching Pexels live for every generation. Purely additive: whatever
+# duration the library can't cover, the existing Pexels/other-source search
+# still fills, exactly as if the library had found nothing at all — so this
+# is safe to enable even while the library is still small.
+#
+# Requires the SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment
+# variables to be set (same ones scripts/build_clip_library.py uses) —
+# without them this logs a warning and falls through to the existing
+# search, as if disabled.
+#
+# 按主题相似度从预先建好的素材库（见 scripts/build_clip_library.py，独立的
+# 每日定时任务）检索背景素材，而不是每次生成都实时搜索 Pexels。纯增量式：
+# 素材库覆盖不到的时长，仍会用现有的 Pexels/其他来源搜索补齐，就像素材库
+# 什么都没找到一样——因此即使素材库内容还很少，开启这个选项也是安全的。
+#
+# 需要设置 SUPABASE_URL 和 SUPABASE_SERVICE_ROLE_KEY 环境变量（与
+# scripts/build_clip_library.py 使用的相同）——未设置时会记录一条警告并
+# 回退到现有搜索流程，效果等同于未开启。
+# use_movement_library = false
