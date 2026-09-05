@@ -16,6 +16,8 @@ from typing import List, Optional
 
 import numpy as np
 
+from app.utils import utils
+
 # Loaded lazily (see _face_cascade()) so importing this module — and running
 # the pure-logic unit tests below — never requires an OpenCV/GUI-capable
 # environment or the Haar cascade data file to be present.
@@ -172,7 +174,7 @@ def cut_segment_to_file(
     """Extract [start_time, end_time) from video_path into output_path via ffmpeg."""
     result = subprocess.run(
         [
-            "ffmpeg",
+            utils.get_ffmpeg_binary(),
             "-y",
             "-ss",
             str(start_time),

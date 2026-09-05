@@ -11,6 +11,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.services import clip_library
+from app.utils import utils
 
 
 def _make_synthetic_video(path: str, num_seconds: int = 6, fps: int = 10) -> None:
@@ -20,7 +21,7 @@ def _make_synthetic_video(path: str, num_seconds: int = 6, fps: int = 10) -> Non
     """
     result = subprocess.run(
         [
-            "ffmpeg",
+            utils.get_ffmpeg_binary(),
             "-y",
             "-f",
             "lavfi",
