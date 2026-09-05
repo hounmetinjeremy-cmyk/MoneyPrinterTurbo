@@ -1,7 +1,1 @@
-J'ai un plan précis en tête pour le système de génération de nos vidéos, et je veux ton avis d'expert :
-​Est-ce que tu penses que c'est possible et viable de mettre en place ce plan pour faire sortir une excellente vidéo ?
-​Le plan en question :
-​Découpage : On récupère plusieurs vidéos (via Pexels ou autre), et le système les découpe automatiquement en micro-morceaux de quelques secondes pour isoler les mouvements clés.
-​Stockage & Indexation : On stocke ces morceaux dans notre base de données (comme Supabase) avec une recherche vectorielle.
-​Assemblage intelligent : Quand un prompt est donné, le système cherche par similarité vectorielle le meilleur template de mouvement pour faire l'assemblage rapidement et obtenir le bon visuel.
-​Dis-moi si selon toi c'est réalisable avec notre code actuel et si ça peut donner un bon résultat propre. »
+Dans un atelier de menuiserie chaleureux, un artisan ponce avec soin une planche de bois brut, faisant voler de fines particules de sciure dans un rayon de lumière naturelle. Gros plan sur ses mains expertes qui assemblent ensuite les pièces d'un meuble moderne, vissant et ajustant chaque angle avec précision. La caméra se déplace pour montrer l'établi couvert d'outils traditionnels — rabot, ciseaux à bois, marteau. Plan final sur le meuble terminé, mis en valeur par la lumière chaude de l'atelier, avec l'artisan qui passe une dernière fois la main dessus, satisfait du résultat.
