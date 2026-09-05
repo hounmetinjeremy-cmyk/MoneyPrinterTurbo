@@ -31,6 +31,7 @@ import os
 import random
 import sys
 import tempfile
+from time import perf_counter
 from typing import List
 
 import psycopg2
@@ -49,13 +50,23 @@ STORAGE_BUCKET = "movement-clips"
 EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIMENSIONS = 768  # matches mpt.movement_clips.embedding's vector(768)
 
+
 # Kept small on purpose: this runs once a day and is not on the generation
 # critical path, but a hosted GitHub Actions job still has a wall-clock
 # budget. Growing the library is a marathon, not a sprint — a few subjects
 # a day, every day, adds up.
-SUBJECTS_PER_RUN = 2
-SEARCH_TERMS_PER_SUBJECT = 3
-VIDEOS_PER_SEARCH_TERM = 2
+#
+# Overridable via environment for a one-off manually-triggered scale test
+# (see .github/workflows/build-clip-library.yml's workflow_dispatch inputs)
+# without changing the daily cron's own pace.
+def _int_env(name: str, default: int) -> int:
+    value = os.environ.get(name, "").strip()
+    return int(value) if value else default
+
+
+SUBJECTS_PER_RUN = _int_env("CLIP_LIBRARY_SUBJECTS_PER_RUN", 2)
+SEARCH_TERMS_PER_SUBJECT = _int_env("CLIP_LIBRARY_SEARCH_TERMS_PER_SUBJECT", 3)
+VIDEOS_PER_SEARCH_TERM = _int_env("CLIP_LIBRARY_VIDEOS_PER_SEARCH_TERM", 2)
 SEGMENT_DURATION_SECONDS = 6.0
 MIN_MOTION_SCORE = 0.02
 
@@ -196,6 +207,7 @@ def process_subject(
         for item in items[:VIDEOS_PER_SEARCH_TERM]:
             source_info = item.source_info or {}
             asset_id = str(source_info.get("asset_id") or item.url)
+            video_started_at = perf_counter()
             try:
                 local_video_path = save_video(video_url=item.url, save_dir=tmp_dir)
             except Exception as e:
@@ -203,8 +215,10 @@ def process_subject(
                 continue
             if not local_video_path:
                 continue
+            download_elapsed = perf_counter() - video_started_at
 
             try:
+                analysis_started_at = perf_counter()
                 segments = clip_library.analyze_video_segments(
                     local_video_path, segment_duration=SEGMENT_DURATION_SECONDS
                 )
@@ -212,14 +226,17 @@ def process_subject(
                 logger.error(f"failed to analyze video {local_video_path}: {e}")
                 continue
 
+            analysis_elapsed = perf_counter() - analysis_started_at
             clean_segments = clip_library.select_clean_segments(
                 segments, min_motion_score=MIN_MOTION_SCORE
             )
             logger.info(
                 f"term={term!r} asset={asset_id}: "
-                f"{len(clean_segments)}/{len(segments)} segments are clean"
+                f"{len(clean_segments)}/{len(segments)} segments are clean "
+                f"(download {download_elapsed:.1f}s, analysis {analysis_elapsed:.1f}s)"
             )
 
+            store_started_at = perf_counter()
             for index, segment in enumerate(clean_segments):
                 clip_path = os.path.join(tmp_dir, f"{asset_id}-{index}.mp4")
                 try:
@@ -257,6 +274,12 @@ def process_subject(
             if os.path.exists(local_video_path):
                 os.remove(local_video_path)
 
+            store_elapsed = perf_counter() - store_started_at
+            logger.info(
+                f"term={term!r} asset={asset_id}: cut+upload+insert took "
+                f"{store_elapsed:.1f}s for {len(clean_segments)} segments"
+            )
+
     return stored_count
 
 
@@ -276,8 +299,17 @@ def main() -> None:
         logger.warning("no subjects to index today, exiting")
         return
 
+    logger.info(
+        f"config: subjects_per_run={SUBJECTS_PER_RUN}, "
+        f"search_terms_per_subject={SEARCH_TERMS_PER_SUBJECT}, "
+        f"videos_per_search_term={VIDEOS_PER_SEARCH_TERM} "
+        f"(up to {len(subjects) * SEARCH_TERMS_PER_SUBJECT * VIDEOS_PER_SEARCH_TERM} "
+        "candidate video downloads this run)"
+    )
+
     db_conn = psycopg2.connect(supabase_db_url)
     total_stored = 0
+    run_started_at = perf_counter()
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
             for subject in subjects:
@@ -292,7 +324,11 @@ def main() -> None:
     finally:
         db_conn.close()
 
-    logger.success(f"stored {total_stored} new clean movement clips today")
+    run_elapsed = perf_counter() - run_started_at
+    logger.success(
+        f"stored {total_stored} new clean movement clips today "
+        f"in {run_elapsed:.1f}s ({run_elapsed / 60:.1f} min)"
+    )
 
 
 if __name__ == "__main__":

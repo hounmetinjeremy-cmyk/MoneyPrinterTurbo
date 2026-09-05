@@ -10,7 +10,20 @@ name: Build Clip Library
 on:
   schedule:
     - cron: "0 3 * * *" # 03:00 UTC daily — offset from daily-short.yml's 08:00
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      subjects_per_run:
+        description: "Override: subjects to index this run (blank = daily default)"
+        required: false
+        default: ""
+      search_terms_per_subject:
+        description: "Override: search terms per subject (blank = daily default)"
+        required: false
+        default: ""
+      videos_per_search_term:
+        description: "Override: videos downloaded per search term (blank = daily default)"
+        required: false
+        default: ""
 
 concurrency:
   group: build-clip-library
@@ -19,7 +32,11 @@ concurrency:
 jobs:
   build-library:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The scheduled daily run stays small (a few minutes); a manually
+    # triggered scale test with the overrides above can run far longer —
+    # this ceiling exists to get a real timing measurement instead of an
+    # arbitrary cutoff, not because the daily run needs this much room.
+    timeout-minutes: 180
 
     steps:
       - name: Check out repository
@@ -51,4 +68,7 @@ jobs:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CLIP_LIBRARY_SUBJECTS_PER_RUN: ${{ github.event.inputs.subjects_per_run }}
+          CLIP_LIBRARY_SEARCH_TERMS_PER_SUBJECT: ${{ github.event.inputs.search_terms_per_subject }}
+          CLIP_LIBRARY_VIDEOS_PER_SEARCH_TERM: ${{ github.event.inputs.videos_per_search_term }}
         run: uv run --no-sync python scripts/build_clip_library.py
