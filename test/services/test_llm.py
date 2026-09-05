@@ -190,6 +190,24 @@ class TestScriptPromptOptions(unittest.TestCase):
         self.assertIn("A beautiful day at the", result)
         self.assertIn("10% of your income", result)
 
+    def test_generate_script_retries_transient_provider_error(self):
+        """
+        与 generate_terms 相同：一次性的限流/超载错误应当重试，而不是把
+        错误文案当成生成失败直接放弃 —— 下一次调用很可能就会成功。
+        """
+        responses = [
+            "Error: 429 Too Many Requests. rate limit exceeded, please retry later.",
+            "A short generated script.",
+        ]
+        with (
+            patch.object(llm, "_generate_response", side_effect=responses),
+            patch.object(llm, "sleep") as mock_sleep,
+        ):
+            result = llm.generate_script(video_subject="test subject")
+
+        self.assertEqual(result, "A short generated script.")
+        mock_sleep.assert_called_once()
+
     def test_generate_terms_can_request_script_ordered_keywords(self):
         """
         按文案顺序匹配素材依赖 LLM 返回有序关键词。这里不调用真实模型，
@@ -235,6 +253,46 @@ class TestScriptPromptOptions(unittest.TestCase):
 
         self.assertEqual(result, [])
         self.assertIsInstance(result, list)
+
+    def test_generate_terms_retries_transient_provider_error(self):
+        """
+        一次性的 503/超载错误应当重试而不是立即放弃 —— 免费层 Gemini 在
+        需求高峰期返回的 503 UNAVAILABLE 通常几秒内就会恢复，直接放弃会
+        把一个本可成功的任务判定为失败。
+        """
+        responses = [
+            "Error: 503 UNAVAILABLE. This model is currently experiencing high demand.",
+            json.dumps(["term one", "term two"]),
+        ]
+        with (
+            patch.object(llm, "_generate_response", side_effect=responses),
+            patch.object(llm, "sleep") as mock_sleep,
+        ):
+            result = llm.generate_terms(
+                video_subject="startup story",
+                video_script="A short startup story.",
+            )
+
+        self.assertEqual(result, ["term one", "term two"])
+        mock_sleep.assert_called_once()
+
+    def test_generate_terms_gives_up_after_repeated_transient_errors(self):
+        """始终失败时仍必须在耗尽重试后返回空列表，保持 List[str] 契约。"""
+        with (
+            patch.object(
+                llm,
+                "_generate_response",
+                return_value="Error: 503 UNAVAILABLE. overloaded",
+            ),
+            patch.object(llm, "sleep") as mock_sleep,
+        ):
+            result = llm.generate_terms(
+                video_subject="startup story",
+                video_script="A short startup story.",
+            )
+
+        self.assertEqual(result, [])
+        self.assertEqual(mock_sleep.call_count, llm._max_retries - 1)
 
     def test_video_script_request_rejects_invalid_advanced_options(self):
         """
@@ -1924,6 +1982,30 @@ class TestRetryWarningBoundary(unittest.TestCase):
             llm._max_retries - 1,
             "Warning must not fire on the final attempt — no further retry will occur",
         )
+
+
+class TestRetryableLLMError(unittest.TestCase):
+    def test_classifies_transient_provider_failures_as_retryable(self):
+        for message in [
+            "Error: 503 UNAVAILABLE. This model is currently experiencing high demand.",
+            "Error: 429 Too Many Requests",
+            "Error: RESOURCE_EXHAUSTED",
+            "Error: connection reset by peer",
+            "Error: request timed out",
+        ]:
+            self.assertTrue(llm._is_retryable_llm_error(message), message)
+
+    def test_classifies_configuration_errors_as_non_retryable(self):
+        """
+        缺少 api_key / 不支持的 provider 这类配置错误永远不会因为重试
+        而恢复，必须立即放弃，避免浪费 _max_retries 次无意义的等待。
+        """
+        for message in [
+            "Error: invalid API key",
+            "Error: gemini: api_key is not set, please set it in the config.toml file.",
+            "Error: unsupported llm provider",
+        ]:
+            self.assertFalse(llm._is_retryable_llm_error(message), message)
 
 
 if __name__ == "__main__":
