@@ -18,10 +18,11 @@ import numpy as np
 
 from app.utils import utils
 
-# Loaded lazily (see _face_cascade()) so importing this module — and running
-# the pure-logic unit tests below — never requires an OpenCV/GUI-capable
-# environment or the Haar cascade data file to be present.
+# Loaded lazily (see _face_cascade()/_profile_cascade()) so importing this
+# module — and running the pure-logic unit tests below — never requires an
+# OpenCV/GUI-capable environment or the Haar cascade data files to be present.
 _FACE_CASCADE = None
+_PROFILE_CASCADE = None
 
 # A frame is judged to contain a visible face at this minimum size, expressed
 # as a fraction of frame width — this filters out tiny incidental faces (a
@@ -40,6 +41,17 @@ def _face_cascade():
     return _FACE_CASCADE
 
 
+def _profile_cascade():
+    global _PROFILE_CASCADE
+    if _PROFILE_CASCADE is None:
+        import cv2
+
+        _PROFILE_CASCADE = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_profileface.xml"
+        )
+    return _PROFILE_CASCADE
+
+
 def frame_has_visible_face(frame: np.ndarray) -> bool:
     """
     Detect whether a single BGR frame contains a visible human face.
@@ -49,15 +61,35 @@ def frame_has_visible_face(frame: np.ndarray) -> bool:
     "why doesn't this person's mouth move" problem entirely rather than
     trying to solve lip-sync on footage of people who have nothing to do
     with the day's script.
+
+    A frontal-only cascade systematically misses exactly the poses this
+    footage is full of: someone looking down at their hands/tools while
+    working, or turned to the side. haarcascade_profileface.xml is trained
+    on one facing direction, so it's run on the frame both as-is and
+    horizontally flipped to catch a profile turned either way. This still
+    won't catch a face pointed straight down at the work (no Haar cascade
+    handles that pose) — segments should still be spot-checked, this cuts
+    down the miss rate rather than eliminating it entirely.
     """
     import cv2
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     min_size = int(frame.shape[1] * _MIN_FACE_SIZE_FRACTION)
-    faces = _face_cascade().detectMultiScale(
-        gray, scaleFactor=1.1, minNeighbors=5, minSize=(min_size, min_size)
-    )
-    return len(faces) > 0
+
+    def _any_detected(image) -> bool:
+        frontal = _face_cascade().detectMultiScale(
+            image, scaleFactor=1.1, minNeighbors=5, minSize=(min_size, min_size)
+        )
+        if len(frontal) > 0:
+            return True
+        profile = _profile_cascade().detectMultiScale(
+            image, scaleFactor=1.1, minNeighbors=5, minSize=(min_size, min_size)
+        )
+        return len(profile) > 0
+
+    if _any_detected(gray):
+        return True
+    return _any_detected(cv2.flip(gray, 1))
 
 
 def compute_motion_score(prev_frame: np.ndarray, curr_frame: np.ndarray) -> float:

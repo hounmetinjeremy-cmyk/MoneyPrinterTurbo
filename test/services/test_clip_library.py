@@ -52,17 +52,57 @@ class TestMotionAndFaceScoring(unittest.TestCase):
     def test_frame_has_visible_face_uses_cascade_detection(self):
         """
         Detection quality itself belongs to OpenCV's own test suite — this
-        only verifies frame_has_visible_face reports whatever the cascade
+        only verifies frame_has_visible_face reports whatever the cascades
         found, so the rest of the pipeline's face-filtering logic can be
         tested deterministically without needing a real photographed face.
         """
         frame = np.zeros((48, 48, 3), dtype=np.uint8)
-        with patch.object(clip_library, "_face_cascade") as mock_cascade_getter:
-            mock_cascade_getter.return_value.detectMultiScale.return_value = []
+        with (
+            patch.object(clip_library, "_face_cascade") as mock_frontal_getter,
+            patch.object(clip_library, "_profile_cascade") as mock_profile_getter,
+        ):
+            mock_frontal_getter.return_value.detectMultiScale.return_value = []
+            mock_profile_getter.return_value.detectMultiScale.return_value = []
             self.assertFalse(clip_library.frame_has_visible_face(frame))
 
-            mock_cascade_getter.return_value.detectMultiScale.return_value = [
+            mock_frontal_getter.return_value.detectMultiScale.return_value = [
                 (5, 5, 20, 20)
+            ]
+            self.assertTrue(clip_library.frame_has_visible_face(frame))
+
+    def test_frame_has_visible_face_catches_a_profile_the_frontal_cascade_misses(self):
+        """
+        A frontal-only cascade misses someone turned to the side or looking
+        down at their work — exactly the poses common in "hands using tools"
+        footage. The profile cascade must be consulted too, not just frontal.
+        """
+        frame = np.zeros((48, 48, 3), dtype=np.uint8)
+        with (
+            patch.object(clip_library, "_face_cascade") as mock_frontal_getter,
+            patch.object(clip_library, "_profile_cascade") as mock_profile_getter,
+        ):
+            mock_frontal_getter.return_value.detectMultiScale.return_value = []
+            mock_profile_getter.return_value.detectMultiScale.return_value = [
+                (5, 5, 20, 20)
+            ]
+            self.assertTrue(clip_library.frame_has_visible_face(frame))
+
+    def test_frame_has_visible_face_checks_the_flipped_frame_too(self):
+        """
+        haarcascade_profileface.xml only reliably matches one facing
+        direction — a profile turned the other way needs the frame flipped
+        before re-checking, or it's missed entirely.
+        """
+        frame = np.zeros((48, 48, 3), dtype=np.uint8)
+        with (
+            patch.object(clip_library, "_face_cascade") as mock_frontal_getter,
+            patch.object(clip_library, "_profile_cascade") as mock_profile_getter,
+        ):
+            mock_frontal_getter.return_value.detectMultiScale.return_value = []
+            # Not found on the frame as-is, but found once flipped.
+            mock_profile_getter.return_value.detectMultiScale.side_effect = [
+                [],
+                [(5, 5, 20, 20)],
             ]
             self.assertTrue(clip_library.frame_has_visible_face(frame))
 
