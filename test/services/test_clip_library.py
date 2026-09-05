@@ -50,12 +50,12 @@ class TestMotionAndFaceScoring(unittest.TestCase):
         self.assertGreater(score, 0.9)
 
     def _mock_cascades(self, *, all_empty: bool = True):
-        """Three mock cascades standing in for _FACE_CASCADE_FILES, all
-        reporting no detections by default so a test only has to override
-        the one call it cares about."""
+        """Mock cascades standing in for _FACE_CASCADE_FILES (currently 2:
+        frontal + profile), all reporting no detections by default so a
+        test only has to override the one call it cares about."""
         from unittest.mock import MagicMock
 
-        cascades = [MagicMock() for _ in range(3)]
+        cascades = [MagicMock() for _ in range(len(clip_library._FACE_CASCADE_FILES))]
         if all_empty:
             for cascade in cascades:
                 cascade.detectMultiScale.return_value = []
