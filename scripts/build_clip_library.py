@@ -18,11 +18,13 @@ Required environment:
     GEMINI_API_KEY, PEXELS_API_KEY  — same secrets daily-short.yml already
         uses (this script embeds search terms with the same Gemini account
         and searches Pexels the same way generation does).
-    SUPABASE_DB_URL  — Postgres connection string for the "center" Supabase
-        project (Settings -> Database -> Connection string). Used to insert
-        rows directly into mpt.movement_clips.
-    SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  — used to upload clip files to
-        the private "movement-clips" Storage bucket via its REST API.
+    SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  — used both to upload clip files
+        to the private "movement-clips" Storage bucket and to insert rows
+        into mpt.movement_clips, entirely through Supabase's REST API
+        (PostgREST) — no direct Postgres connection/password needed. This
+        requires "mpt" to be added to the project's exposed schemas
+        (Settings -> API -> Data API -> Exposed schemas), since PostgREST
+        only serves "public" by default.
 """
 
 from __future__ import annotations
@@ -34,7 +36,6 @@ import tempfile
 from time import perf_counter
 from typing import List
 
-import psycopg2
 import requests
 from loguru import logger
 
@@ -130,8 +131,9 @@ def upload_clip(
 
 
 def insert_movement_clip(
-    conn,
     *,
+    supabase_url: str,
+    service_role_key: str,
     source_asset_id: str,
     storage_path: str,
     duration_seconds: float,
@@ -141,36 +143,46 @@ def insert_movement_clip(
     keywords: List[str],
     embedding: List[float],
 ) -> None:
-    # psycopg2 has no built-in adapter for pgvector's "vector" type — handing
-    # it a plain Python list would try to bind it as a native array, which
-    # the column's declared type rejects. Send it as vector's own text input
-    # format ("[0.1,0.2,...]") and cast explicitly instead of pulling in the
-    # separate pgvector-python dependency for a single insert path.
-    embedding_literal = "[" + ",".join(repr(float(v)) for v in embedding) + "]"
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            insert into mpt.movement_clips (
-                source_provider, source_asset_id, storage_path,
-                duration_seconds, width, height, has_visible_face,
-                motion_score, keywords, embedding
-            ) values (%s, %s, %s, %s, %s, %s, false, %s, %s, %s::vector)
-            on conflict (source_provider, source_asset_id, storage_path)
-            do nothing
-            """,
-            (
-                "pexels",
-                source_asset_id,
-                storage_path,
-                duration_seconds,
-                width,
-                height,
-                motion_score,
-                keywords,
-                embedding_literal,
-            ),
+    # Goes through PostgREST rather than a direct Postgres connection — no
+    # database password to manage as a secret, just the same service-role
+    # key already used for Storage uploads. "mpt" must be added to the
+    # project's exposed schemas (Settings -> API -> Data API) since
+    # PostgREST only serves "public" by default; the endpoint path itself
+    # never includes the schema name, only the Content-Profile header does.
+    # PostgREST/pgvector accept a plain JSON array of floats for a "vector"
+    # column directly — no text-literal casting needed here, unlike the
+    # psycopg2 path this replaced.
+    url = f"{supabase_url}/rest/v1/movement_clips"
+    r = requests.post(
+        url,
+        headers={
+            "apikey": service_role_key,
+            "Authorization": f"Bearer {service_role_key}",
+            "Content-Type": "application/json",
+            "Content-Profile": "mpt",
+            # Emulates the "on conflict (...) do nothing" the direct-SQL
+            # version used, against the same unique constraint.
+            "Prefer": "resolution=ignore-duplicates,return=minimal",
+        },
+        json={
+            "source_provider": "pexels",
+            "source_asset_id": source_asset_id,
+            "storage_path": storage_path,
+            "duration_seconds": duration_seconds,
+            "width": width,
+            "height": height,
+            "has_visible_face": False,
+            "motion_score": motion_score,
+            "keywords": keywords,
+            "embedding": embedding,
+        },
+        timeout=(30, 60),
+    )
+    if r.status_code >= 300:
+        raise RuntimeError(
+            f"failed to insert movement_clips row for {source_asset_id}: "
+            f"{r.status_code} {r.text}"
         )
-    conn.commit()
 
 
 def process_subject(
@@ -179,7 +191,6 @@ def process_subject(
     genai_client,
     supabase_url: str,
     service_role_key: str,
-    db_conn,
     tmp_dir: str,
 ) -> int:
     logger.info(f"indexing subject: {subject}")
@@ -254,7 +265,8 @@ def process_subject(
                         local_path=clip_path,
                     )
                     insert_movement_clip(
-                        db_conn,
+                        supabase_url=supabase_url,
+                        service_role_key=service_role_key,
                         source_asset_id=f"{asset_id}-{index}",
                         storage_path=storage_path,
                         duration_seconds=segment.end_time - segment.start_time,
@@ -286,7 +298,6 @@ def process_subject(
 def main() -> None:
     gemini_api_key = _require_env("GEMINI_API_KEY")
     _require_env("PEXELS_API_KEY")  # read via app.config by search_videos_pexels
-    supabase_db_url = _require_env("SUPABASE_DB_URL")
     supabase_url = _require_env("SUPABASE_URL")
     service_role_key = _require_env("SUPABASE_SERVICE_ROLE_KEY")
 
@@ -307,22 +318,17 @@ def main() -> None:
         "candidate video downloads this run)"
     )
 
-    db_conn = psycopg2.connect(supabase_db_url)
     total_stored = 0
     run_started_at = perf_counter()
-    try:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            for subject in subjects:
-                total_stored += process_subject(
-                    subject,
-                    genai_client=genai_client,
-                    supabase_url=supabase_url,
-                    service_role_key=service_role_key,
-                    db_conn=db_conn,
-                    tmp_dir=tmp_dir,
-                )
-    finally:
-        db_conn.close()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        for subject in subjects:
+            total_stored += process_subject(
+                subject,
+                genai_client=genai_client,
+                supabase_url=supabase_url,
+                service_role_key=service_role_key,
+                tmp_dir=tmp_dir,
+            )
 
     run_elapsed = perf_counter() - run_started_at
     logger.success(
