@@ -1,5 +1,4 @@
-Voici la description étape par étape de l'action qui va se dérouler dans la vidéo :
-Au début de la vidéo : Un menuisier commence à poncer activement un plateau de meuble moderne avec une ponceuse électrique, faisant s'envoler de fines particules de poussière dans un rayon de lumière.
-Au milieu de la vidéo : La caméra se décale pour montrer un second artisan qui assemble avec précision les pièces en bois d'une structure géométrique épurée.
-À la fin de la vidéo : Un plan serré met en valeur les mains des artisans en plein travail, fixant les derniers éléments pour finaliser le meuble moderne.
-# déclenché 2026-09-04T07:48:33.858Z
+On continue sur le pipeline actuel pour tester proprement avec le vrai sujet du menuisier.
+​Par contre, on a besoin d'améliorer un point important sur l'interface utilisateur : je veux qu'on puisse voir clairement en direct le temps de génération en secondes pendant que la vidéo se crée, et surtout voir s'il y a une erreur qui s'affiche directement dans l'interface si le processus plante, au lieu d'attendre dans le vide.
+​Est-ce que tu peux ajouter cet affichage du statut et du temps sur l'interface ?
+# déclenché 2026-09-05T00:02:17.938Z
