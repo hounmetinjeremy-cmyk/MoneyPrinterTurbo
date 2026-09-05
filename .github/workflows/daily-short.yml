@@ -139,6 +139,19 @@ jobs:
         # Always keeps the latest render reachable from La Régie
         # (previews/latest.mp4, served straight from raw.githubusercontent.com),
         # regardless of whether the YouTube upload ran.
+        #
+        # actions/checkout@v4 pins the commit that triggered this run
+        # (github.sha), not main's tip at the time the job actually starts.
+        # The "daily-short" concurrency group can leave a run queued for
+        # several minutes behind an earlier one, and that earlier run may
+        # have already pushed its own previews/latest.mp4 commit by the time
+        # this one starts — so a plain `git pull --rebase` here tries to
+        # replay this run's commit over a binary file whose base has moved,
+        # which git can't do and fails the whole job even though generation
+        # itself succeeded. Fetch+reset to the current tip and commit fresh
+        # each attempt instead — there's no history worth preserving for a
+        # single "latest" file — and retry a few times in case something
+        # else (a subjects/photos push from La Régie) races the same push.
         id: preview
         run: |
           set -euo pipefail
@@ -146,14 +159,26 @@ jobs:
           cp "${{ steps.generate.outputs.video_path }}" previews/latest.mp4
           git config user.name "la-regie-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add previews/latest.mp4
-          if git diff --cached --quiet; then
-            echo "preview video unchanged, nothing to commit"
-          else
+
+          BRANCH="${{ github.ref_name }}"
+          for attempt in 1 2 3 4 5; do
+            git fetch origin "$BRANCH"
+            git reset --mixed "origin/$BRANCH"
+            git add previews/latest.mp4
+            if git diff --cached --quiet; then
+              echo "preview video unchanged, nothing to commit"
+              exit 0
+            fi
             git commit -m "Preview: ${{ steps.pick.outputs.subject }}"
-            git pull --rebase origin "${{ github.ref_name }}"
-            git push origin "HEAD:${{ github.ref_name }}"
-          fi
+            if git push origin "HEAD:$BRANCH"; then
+              echo "pushed preview video on attempt $attempt"
+              exit 0
+            fi
+            echo "push race on attempt $attempt, retrying…"
+            sleep $((attempt * 3))
+          done
+          echo "::error::Could not push preview video after $attempt attempts — repeated push race on $BRANCH."
+          exit 1
 
       - name: Upload the video as a workflow artifact
         # Extra copy with its own retention window, independent of the
