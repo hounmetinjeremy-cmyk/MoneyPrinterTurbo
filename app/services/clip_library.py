@@ -32,9 +32,16 @@ _FACE_CASCADES = None
 # haarcascade_profileface.xml only reliably matches one facing direction, so
 # it's run on each frame both as-is and horizontally flipped (see
 # frame_has_visible_face) to catch a profile turned either way.
+#
+# haarcascade_frontalface_alt2.xml was tried here too (alongside halving
+# sample_stride_frames) and measured on a real backfill run: the clean-clip
+# rate collapsed from ~70% to ~3% (3 of ~87 segments), i.e. it was flagging
+# wood grain/sawdust-in-light/tool textures as faces far more than it was
+# catching real ones. Reverted — a false-positive-heavy detector that
+# rejects almost everything doesn't help fill the library any more than a
+# too-loose one that misses real faces would.
 _FACE_CASCADE_FILES = (
     "haarcascade_frontalface_default.xml",
-    "haarcascade_frontalface_alt2.xml",
     "haarcascade_profileface.xml",
 )
 
@@ -119,16 +126,19 @@ class SegmentAnalysis:
 def analyze_video_segments(
     video_path: str,
     segment_duration: float = 6.0,
-    sample_stride_frames: int = 2,
+    sample_stride_frames: int = 5,
 ) -> List[SegmentAnalysis]:
     """
     Split a video into fixed-length segments and score each one for face
     presence and motion, without decoding every single frame — sampling
     every `sample_stride_frames`-th frame keeps this fast enough to run over
-    a day's worth of stock footage in a scheduled job. Kept fairly dense (a
-    face only has to appear on one sampled frame within a segment to sink
-    it) since the cost of a missed face is much higher than the cost of a
-    slower cron.
+    a day's worth of stock footage in a scheduled job.
+
+    Was briefly dropped to 2 alongside a 3rd face cascade to catch more
+    brief face appearances; measured on a real backfill run, that pairing
+    collapsed the clean-clip rate from ~70% to ~3% (false positives on
+    wood grain/sawdust/tool textures, not more real faces caught). Reverted
+    together with the cascade change — see _FACE_CASCADE_FILES.
     """
     import cv2
 
