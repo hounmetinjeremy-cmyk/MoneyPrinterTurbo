@@ -578,6 +578,18 @@ Batch manifests:
             "generates a UUID for every task"
         ),
     )
+    execution_group.add_argument(
+        "--result-file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "also write the {task_id, result} JSON to this file. Meant for "
+            "automation (e.g. CI) that needs the result as structured data: "
+            "unlike stdout, this file only ever contains that one JSON "
+            "document, so it isn't at risk of picking up unrelated output a "
+            "subprocess or library happens to write to stdout during the run"
+        ),
+    )
     args = parser.parse_args(argv)
 
     if (
@@ -1575,7 +1587,11 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    print(json.dumps({"task_id": task_id, "result": result}, ensure_ascii=False))
+    result_payload = {"task_id": task_id, "result": result}
+    print(json.dumps(result_payload, ensure_ascii=False))
+    if args.result_file:
+        with open(args.result_file, "w", encoding="utf-8") as f:
+            json.dump(result_payload, f, ensure_ascii=False)
     return 0
 
 

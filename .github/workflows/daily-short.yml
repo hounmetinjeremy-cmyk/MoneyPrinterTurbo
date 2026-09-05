@@ -107,12 +107,17 @@ jobs:
             --video-clip-duration 8 \
             --voice-name fr-FR-DeniseNeural \
             --stop-at video \
+            --result-file cli_result.json \
             | tee cli_output.log
+          # cli_result.json holds only the {task_id, result} JSON document,
+          # written directly by cli.py itself — unlike cli_output.log (tee'd
+          # stdout), it can't pick up unrelated output a subprocess or thread
+          # happens to also write to stdout during the run, which previously
+          # broke "parse the last line of the combined log as JSON".
           VIDEO_PATH=$(uv run --no-sync python -c "
           import json
-          with open('cli_output.log', encoding='utf-8') as f:
-              lines = [l for l in f if l.strip()]
-          print(json.loads(lines[-1])['result']['videos'][0])
+          with open('cli_result.json', encoding='utf-8') as f:
+              print(json.load(f)['result']['videos'][0])
           ")
           echo "video_path=$VIDEO_PATH" >> "$GITHUB_OUTPUT"
 
