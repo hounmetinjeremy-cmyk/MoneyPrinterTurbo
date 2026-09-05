@@ -423,12 +423,17 @@ def character_overlay_dir(create: bool = False) -> str:
     return utils.storage_dir("character_photos", create=create)
 
 
-def pick_random_character_overlay_image() -> str:
+def pick_latest_character_overlay_image() -> str:
     """
-    从固定角色素材目录随机挑选一张人物照片（原始图片文件或 .b64 文本文件）。
+    从固定角色素材目录挑选用户最近上传的一张人物照片（原始图片文件或 .b64 文本文件）。
 
     目录里放的是用户自己的照片（同一角色），与背景视频来源完全独立；
     没有配置任何照片时返回空字符串，调用方据此跳过叠加而不是报错中断成片。
+
+    按修改时间取最新一张，而不是随机挑选：上传入口（La Régie）每次上传都用带时间戳
+    的文件名新增一个文件，本仓库这边不负责、也无法保证旧文件会被删除——如果挑选逻辑
+    是"随机选一张"，换了新照片后每次生成仍可能抽到旧照片，达不到"上传新照片就该用
+    新照片"的预期。
     """
     overlay_dir = character_overlay_dir()
     if not os.path.isdir(overlay_dir):
@@ -436,12 +441,12 @@ def pick_random_character_overlay_image() -> str:
     valid_suffixes = CHARACTER_OVERLAY_EXTENSIONS + (CHARACTER_OVERLAY_B64_EXTENSION,)
     candidates = [
         os.path.join(overlay_dir, name)
-        for name in sorted(os.listdir(overlay_dir))
+        for name in os.listdir(overlay_dir)
         if name.lower().endswith(valid_suffixes)
     ]
     if not candidates:
         return ""
-    return random.choice(candidates)
+    return max(candidates, key=os.path.getmtime)
 
 
 def _open_character_overlay_source(image_path: str):
@@ -1440,7 +1445,7 @@ def generate_video(
             clip_stack.callback(video_clip.close)
 
         if getattr(params, "character_overlay_enabled", False):
-            overlay_image_path = pick_random_character_overlay_image()
+            overlay_image_path = pick_latest_character_overlay_image()
             if overlay_image_path:
                 try:
                     overlay_clip = _build_character_overlay_clip(

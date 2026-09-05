@@ -1292,5 +1292,59 @@ class TestMaterialResolutionTolerance(unittest.TestCase):
         self.assertFalse(vd.is_material_resolution_acceptable(320, 240))
 
 
+class TestPickLatestCharacterOverlayImage(unittest.TestCase):
+    """
+    The character-overlay photo is uploaded from La Régie's control page as
+    a new timestamp-named file each time — this repo has no way to know
+    whether the upload side deletes the previous one. Picking "the newest
+    file" rather than "a random file" is what makes "upload a new photo"
+    actually take effect on the next generation, even if an old file lingers.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+    def _write(self, name: str, mtime: float) -> str:
+        path = os.path.join(self.tmp_dir, name)
+        with open(path, "w") as f:
+            f.write("x")
+        os.utime(path, (mtime, mtime))
+        return path
+
+    def test_returns_empty_string_when_no_photos_exist(self):
+        with patch.object(vd, "character_overlay_dir", return_value=self.tmp_dir):
+            self.assertEqual(vd.pick_latest_character_overlay_image(), "")
+
+    def test_returns_empty_string_when_directory_does_not_exist(self):
+        missing_dir = os.path.join(self.tmp_dir, "does-not-exist")
+        with patch.object(vd, "character_overlay_dir", return_value=missing_dir):
+            self.assertEqual(vd.pick_latest_character_overlay_image(), "")
+
+    def test_picks_the_most_recently_modified_photo(self):
+        older = self._write("old-photo.png", mtime=1_000_000)
+        newer = self._write("new-photo.png", mtime=2_000_000)
+        with patch.object(vd, "character_overlay_dir", return_value=self.tmp_dir):
+            self.assertEqual(vd.pick_latest_character_overlay_image(), newer)
+            self.assertNotEqual(vd.pick_latest_character_overlay_image(), older)
+
+    def test_a_newly_uploaded_photo_takes_over_from_an_older_one(self):
+        """The exact scenario this exists for: uploading a new photo must
+        make it win over a previous photo left in the same directory,
+        regardless of filename ordering."""
+        self._write("a-first-upload.png", mtime=1_000_000)
+        newest = self._write("z-not-alphabetically-last.b64", mtime=1_000_000)
+        # Re-touch to a later mtime, simulating "just uploaded".
+        os.utime(newest, (3_000_000, 3_000_000))
+        with patch.object(vd, "character_overlay_dir", return_value=self.tmp_dir):
+            self.assertEqual(vd.pick_latest_character_overlay_image(), newest)
+
+    def test_ignores_files_with_unsupported_extensions(self):
+        self._write("readme.txt", mtime=5_000_000)
+        photo = self._write("photo.jpg", mtime=1_000_000)
+        with patch.object(vd, "character_overlay_dir", return_value=self.tmp_dir):
+            self.assertEqual(vd.pick_latest_character_overlay_image(), photo)
+
+
 if __name__ == "__main__":
     unittest.main()
