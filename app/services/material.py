@@ -20,6 +20,7 @@ from app.models.schema import MaterialInfo, VideoAspect, VideoConcatMode
 from app.services import (
     material_cache,
     metaso_minimax,
+    movement_library,
     ofox,
     task_artifacts,
     video,
@@ -1765,6 +1766,73 @@ def download_videos(
             material_directory=material_directory,
         )
 
+    video_paths: list[str] = []
+    material_sources: list[dict[str, Any]] = []
+    total_duration = 0.0
+
+    # Optional pre-fill from the indexed movement-clip library (see
+    # app.services.movement_library) — retrieval by topic similarity
+    # instead of a live Pexels search. Purely additive: whatever duration
+    # this doesn't cover, the existing search below still fills, exactly as
+    # if the library had found nothing at all. The library is populated by
+    # a separate daily cron (scripts/build_clip_library.py) and starts
+    # empty, so this must never be the only source of material.
+    if config.app.get("use_movement_library", False):
+        gemini_api_key = config.app.get("gemini_api_key", "")
+        supabase_url = os.environ.get("SUPABASE_URL", "")
+        service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        if gemini_api_key and supabase_url and service_role_key:
+            try:
+                library_clips = movement_library.fetch_movement_clips_for_subject(
+                    search_terms=search_terms,
+                    required_duration=audio_duration,
+                    max_clip_duration=max_clip_duration,
+                    material_directory=material_directory,
+                    gemini_api_key=gemini_api_key,
+                    supabase_url=supabase_url,
+                    service_role_key=service_role_key,
+                )
+            except Exception as e:
+                logger.error(f"movement library retrieval failed, falling back: {e}")
+                library_clips = []
+
+            for clip in library_clips:
+                video_paths.append(clip.local_path)
+                item = MaterialInfo(
+                    provider="movement_library",
+                    duration=int(clip.duration_seconds),
+                    source_info={
+                        "provider": "movement_library",
+                        "asset_id": clip.source_asset_id,
+                        "search_term": ", ".join(clip.keywords),
+                    },
+                )
+                try:
+                    material_sources.append(
+                        _material_source_record(item, clip.local_path)
+                    )
+                except Exception as source_error:
+                    logger.warning(
+                        "failed to prepare movement library source record: "
+                        f"{source_error}"
+                    )
+                total_duration += min(max_clip_duration, clip.duration_seconds)
+        else:
+            logger.warning(
+                "use_movement_library is enabled but SUPABASE_URL / "
+                "SUPABASE_SERVICE_ROLE_KEY are not configured, skipping"
+            )
+
+    if total_duration > audio_duration:
+        logger.info(
+            f"movement library alone covered the required duration "
+            f"({total_duration:.1f}s of {audio_duration:.1f}s needed), "
+            "skipping live search"
+        )
+        logger.success(f"downloaded {len(video_paths)} videos")
+        _persist_material_sources(task_id, material_sources)
+        return video_paths
+
     valid_video_items = []
     valid_video_urls = []
     found_duration = 0.0
@@ -1785,14 +1853,10 @@ def download_videos(
     logger.info(
         f"found total videos: {len(valid_video_items)}, required duration: {audio_duration} seconds, found duration: {found_duration} seconds"
     )
-    video_paths = []
-    material_sources: list[dict[str, Any]] = []
 
     concat_mode_value = getattr(video_concat_mode, "value", video_concat_mode)
     if concat_mode_value == VideoConcatMode.random.value:
         random.shuffle(valid_video_items)
-
-    total_duration = 0.0
     for item in valid_video_items:
         try:
             source_info = item.source_info if isinstance(item.source_info, dict) else {}
